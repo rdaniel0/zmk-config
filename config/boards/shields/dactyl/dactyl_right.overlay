@@ -9,10 +9,10 @@
 
 &kscan0 {
     col-gpios
-        = <&gpio0 18 GPIO_ACTIVE_HIGH> // col9 in the schematic
-        , <&gpio1 15  GPIO_ACTIVE_HIGH> // col8 in the schematic
-        , <&gpio0 14 GPIO_ACTIVE_HIGH> // col7 in the schematic
-        , <&gpio1 16  GPIO_ACTIVE_HIGH> // col6 in the schematic
-        , <&gpio1 10  GPIO_ACTIVE_HIGH> // col5 in the schematic
+        = <&gpio0 20 GPIO_ACTIVE_HIGH> // col9 in the schematic
+        , <&gpio0 22 GPIO_ACTIVE_HIGH> // col8 in the schematic
+        , <&gpio0 24 GPIO_ACTIVE_HIGH> // col7 in the schematic
+        , <&gpio1 0  GPIO_ACTIVE_HIGH> // col6 in the schematic
+        , <&gpio0 11 GPIO_ACTIVE_HIGH> // col5 in the schematic
         ;
 };
