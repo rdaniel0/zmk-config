@@ -14,17 +14,17 @@
 
         Graphite {
             bindings = <
-&kp B               &kp L  &kp D     &kp W             &kp Z    &kp GRAVE  &kp F        &kp O      &kp U    &kp J
+&kp B               &kp L  &kp D     &kp W             &kp Z    &kp SINGLE_QUOTE  &kp F        &kp O      &kp U    &kp J
 &kp N               &kp R  &kp T     &kp S             &kp G    &kp Y      &kp H        &kp A      &kp E    &kp I
-&mt LEFT_CONTROL Q  &kp X  &kp M     &kp C             &kp V    &kp K      &kp P        &kp COMMA  &kp DOT  &mt RCTRL FSLH
-                           &kp LGUI  &mt LSHIFT SPACE  &mo 1    &mo 2      &lt 2 ENTER  &kp RALT
+&mt LCTRL Q  &kp X  &kp M     &kp C             &kp V    &kp K      &kp P        &kp COMMA  &kp DOT  &mt RCTRL FSLH
+                           &kp LGUI  &mt LSHFT SPACE  &mo 1    &mo 2      &lt 2 ENTER  &kp RALT
             >;
         };
 
         Commands_Symbols {
             bindings = <
-&kp ESCAPE  &kp TAB    &kp DEL      &kp N3        &kp N4          &kp N5        &kp N6        &kp N7        &kp N8    &kp BACKSPACE
-&kp N0      &kp BSPC   &bt BT_CLR   &bt BT_SEL 0  &bt BT_SEL 1    &bt BT_SEL 2  &bt BT_SEL 3  &bt BT_SEL 4  &kp LEFT  &kp DOWN
+&kp ESCAPE  &kp TAB    &kp DEL      &kp N3        &kp N4          &kp GRAVE &trans       &kp LBKT        &kp RBKT           &trans
+&kp N0      &kp BSPC   &bt BT_CLR   &bt BT_SEL 0  &bt BT_SEL 1    &bt BT_SEL 2  &kp SEMI  &kp LPAR  &kp RPAR  &trans
 &kp UP      &kp RIGHT  &bootloader  &sys_reset    &kp LSHFT       &trans        &trans        &trans        &trans    &trans
                        &trans       &trans        &trans          &trans        &trans        &trans
             >;
@@ -32,9 +32,9 @@
 
         Navigation_Numbers {
             bindings = <
-&kp TAB   &kp EXCL  &kp AT     &kp HASH   &kp DLLR     &kp PRCNT   &kp CARET  &kp AMPS   &kp ASTRK  &kp LPAR
-&kp RPAR  &kp BSPC  &kp LCTRL  &trans     &trans       &sys_reset  &trans     &trans     &kp MINUS  &kp EQUAL
-&kp LBKT  &kp RBKT  &kp BSLH   &kp GRAVE  &kp LSHFT    &kp KP_N0   &kp N1     &kp N2     &trans     &trans
+&kp TAB   &kp EXCL  &kp AT     &kp HASH   &kp DLLR     &bootloader  &kp N7  &kp N8   &kp N9  &kp BACKSPACE
+&kp RPAR  &kp BSPC  &kp UP  &trans     &trans       &sys_reset  &kp N4     &kp N5     &kp N6  &kp EQUAL
+&kp LCTRL  &kp LEFT  &kp DOWN   &kp RIGHT  &kp LSHFT    &kp KP_N0   &kp N1     &kp N2     &kp N3     &kp RCTRL
                     &kp UNDER  &kp PLUS   &kp LBRC     &trans      &kp PIPE   &kp TILDE
             >;
         };
