@@ -12,6 +12,25 @@
 #define NAVNUM 2
 
 / {
+    combos {
+        compatible = "zmk,combos";
+
+        okaies_combo {
+            bindings = <&okaies>;
+            key-positions = <7 25>;
+            layers = <0>;
+        };
+    };
+
+    macros {
+        okaies: okaies {
+            compatible = "zmk,behavior-macro";
+            #binding-cells = <0>;
+            bindings = <&kp LS(O) &kp K &kp A &kp I &kp E &kp S>;
+            label = "OKAIES";
+        };
+    };
+
     keymap {
         compatible = "zmk,keymap";
 
