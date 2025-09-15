@@ -11,6 +11,8 @@
 #define CMDSYM 1
 #define NAVNUM 2
 
+&mt { flavor = "balanced"; };
+
 / {
     combos {
         compatible = "zmk,combos";
