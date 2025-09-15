@@ -20,6 +20,16 @@
             key-positions = <7 25>;
             layers = <0>;
         };
+
+        lgtm_combo {
+            bindings = <&lgtm_macro>;
+            key-positions = <1 14>;
+        };
+
+        lambda_macro {
+            bindings = <&lambda_macro>;
+            key-positions = <0 1 2>;
+        };
     };
 
     macros {
@@ -28,6 +38,20 @@
             #binding-cells = <0>;
             bindings = <&kp LS(O) &kp K &kp A &kp I &kp E &kp S>;
             label = "OKAIES";
+        };
+
+        lgtm_macro: lgtm_macro {
+            compatible = "zmk,behavior-macro";
+            #binding-cells = <0>;
+            bindings = <&kp LS(L) &kp LS(G) &kp LS(T) &kp LS(M)>;
+            label = "LGTM_MACRO";
+        };
+
+        lambda_macro: lambda_macro {
+            compatible = "zmk,behavior-macro";
+            #binding-cells = <0>;
+            bindings = <&kp L &kp A &kp M &kp B &kp D &kp A>;
+            label = "LAMBDA_MACRO";
         };
     };
 
