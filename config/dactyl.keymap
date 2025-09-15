@@ -10,6 +10,7 @@
 
 #define CMDSYM 1
 #define NAVNUM 2
+#define OSFNUM 3
 
 &mt { flavor = "balanced"; };
 
@@ -82,6 +83,15 @@
 &trans  &trans    &kp HOME  &kp END    &trans    &bootloader  &kp N7  &kp N8  &kp N9  &kp BSPC
 &trans  &kp LEFT  &kp UP    &kp RIGHT  &trans    &sys_reset   &kp N4  &kp N5  &kp N6  &kp EQUAL
 &trans  &trans    &kp DOWN  &trans     &trans    &kp N0       &kp N1  &kp N2  &kp N3  &trans
+                  &trans    &trans     &trans    &trans       &trans  &trans
+            >;
+        };
+
+        OS_FnNumbers {
+            bindings = <
+&trans  &trans    &trans  &trans    &trans    &trans  &kp F7  &kp F8  &kp F9  &kp F10
+&trans  &trans  &trans    &C_SLEEP  &trans    &trans   &kp F4  &kp F5  &kp F6  &kp F11
+&trans  &trans    &trans  &trans     &trans    &trans       &kp F1  &kp F2  &kp F3  &kp F12
                   &trans    &trans     &trans    &trans       &trans  &trans
             >;
         };
