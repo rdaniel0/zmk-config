@@ -81,7 +81,7 @@
         Navigation_Numbers {
             bindings = <
 &trans  &trans    &kp HOME  &kp END    &trans    &bootloader  &kp N7  &kp N8  &kp N9  &kp BSPC
-&trans  &kp LEFT  &kp UP    &kp RIGHT  &trans    &sys_reset   &kp N4  &kp N5  &kp N6  &kp EQUAL
+&trans  &kp LEFT  &kp UP    &kp RIGHT  &trans    &sys_reset   &kp N4  &kp N5  &kp N6  &kp RGUI
 &trans  &trans    &kp DOWN  &trans     &trans    &kp N0       &kp N1  &kp N2  &kp N3  &trans
                   &trans    &trans     &trans    &trans       &trans  &trans
             >;
