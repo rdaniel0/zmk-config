@@ -35,6 +35,18 @@
             key-positions = <0 1 2>;
             layers = <0>;
         };
+
+        gui_ctrl_left {
+            bindings = <&kp LG(LC(LEFT))>;
+            key-positions = <11 20 30>;
+            layers = <0>;
+        };
+
+        gui_ctrl_right {
+            bindings = <&kp LG(LC(RIGHT))>;
+            key-positions = <20 30 13>;
+            layers = <0>;
+        };
     };
 
     macros {
