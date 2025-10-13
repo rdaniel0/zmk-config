@@ -47,6 +47,12 @@
             key-positions = <20 30 13>;
             layers = <0>;
         };
+
+        arrow_func_combo {
+            bindings = <&arrow_func>;
+            key-positions = <17 18>;
+            layers = <1>;
+        };
     };
 
     macros {
@@ -66,6 +72,13 @@
             compatible = "zmk,behavior-macro";
             #binding-cells = <0>;
             bindings = <&kp L &kp A &kp M &kp B &kp D &kp A>;
+        };
+
+        arrow_func: arrow_func {
+            compatible = "zmk,behavior-macro";
+            #binding-cells = <0>;
+            bindings = <&kp LPAR &kp RPAR &kp SPACE &kp EQUAL &kp GT &kp SPACE>;
+            label = "ARROW_FUNC";
         };
     };
 
