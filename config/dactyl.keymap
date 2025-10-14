@@ -96,28 +96,28 @@
 
         Commands_Symbols {
             bindings = <
-&kp ESCAPE  &kp TAB    &kp DEL      &kp N3        &kp N4          &kp GRAVE     &trans    &kp LBKT   &kp RBKT   &trans
-&kp LGUI    &kp BSPC   &bt BT_CLR   &bt BT_SEL 0  &bt BT_SEL 1    &bt BT_SEL 2  &kp SEMI  &kp LPAR   &kp RPAR   &trans
-&trans      &kp RIGHT  &bootloader  &sys_reset    &kp LSHFT       &trans        &trans    &kp MINUS  &kp EQUAL  &mt RCTRL BSLH
-                       &trans       &trans        &trans          &trans        &trans    &trans
+&kp ESCAPE  &kp TAB    &kp DEL     &kp N3        &kp N4          &kp GRAVE     &trans    &kp LBKT   &kp RBKT   &trans
+&kp LGUI    &kp BSPC   &bt BT_CLR  &bt BT_SEL 0  &bt BT_SEL 1    &bt BT_SEL 2  &kp SEMI  &kp LPAR   &kp RPAR   &trans
+&trans      &kp RIGHT  &trans      &trans        &kp LSHFT       &trans        &trans    &kp MINUS  &kp EQUAL  &mt RCTRL BSLH
+                       &trans      &trans        &trans          &trans        &trans    &trans
             >;
         };
 
         Navigation_Numbers {
             bindings = <
-&trans  &trans    &kp HOME  &kp END    &trans    &bootloader  &kp N7  &kp N8  &kp N9  &kp BSPC
-&trans  &kp LEFT  &kp UP    &kp RIGHT  &trans    &sys_reset   &kp N4  &kp N5  &kp N6  &kp RGUI
-&trans  &trans    &kp DOWN  &trans     &trans    &kp N0       &kp N1  &kp N2  &kp N3  &trans
-                  &trans    &trans     &trans    &trans       &trans  &trans
+&trans  &trans    &kp HOME  &kp END    &trans    &trans  &kp N7  &kp N8  &kp N9  &kp BSPC
+&trans  &kp LEFT  &kp UP    &kp RIGHT  &trans    &trans  &kp N4  &kp N5  &kp N6  &kp RGUI
+&trans  &trans    &kp DOWN  &trans     &trans    &kp N0  &kp N1  &kp N2  &kp N3  &trans
+                  &trans    &trans     &trans    &trans  &trans  &trans
             >;
         };
 
         OS_FnNumbers {
             bindings = <
-&trans  &trans  &trans  &trans       &trans    &trans  &kp F7  &kp F8  &kp F9  &kp F10
-&trans  &trans  &trans  &kp C_SLEEP  &trans    &trans  &kp F4  &kp F5  &kp F6  &kp F11
-&trans  &trans  &trans  &trans       &trans    &trans  &kp F1  &kp F2  &kp F3  &kp F12
-                &trans  &trans       &trans    &trans  &trans  &trans
+&trans  &trans  &trans  &trans       &bootloader    &bootloader  &kp F7  &kp F8  &kp F9  &kp F10
+&trans  &trans  &trans  &kp C_SLEEP  &sys_reset     &sys_reset   &kp F4  &kp F5  &kp F6  &kp F11
+&trans  &trans  &trans  &trans       &trans         &trans       &kp F1  &kp F2  &kp F3  &kp F12
+                &trans  &trans       &trans         &trans       &trans  &trans
             >;
         };
     };
