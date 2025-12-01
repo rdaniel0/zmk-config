@@ -52,6 +52,18 @@
             key-positions = <17 18>;
             layers = <1>;
         };
+
+        ctrl_left {
+            bindings = <&kp LC(LEFT)>;
+            key-positions = <11 20>;
+            layers = <0>;
+        };
+
+        ctrl_right {
+            bindings = <&kp LC(RIGHT)>;
+            key-positions = <13 20>;
+            layers = <0>;
+        };
     };
 
     macros {
