@@ -24,4 +24,8 @@ include:
   - board: nice_nano
     shield: dactyl_right
   - board: nice_nano
+    shield: dactyl_right
+    snippet: zmk-usb-logging
+    artifact-name: dactyl_right_logging
+  - board: nice_nano
     shield: settings_reset
