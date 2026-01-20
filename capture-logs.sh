@@ -15,7 +15,15 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Trap Ctrl+C and cleanup
-trap 'echo -e "\n${YELLOW}Stopping log capture...${NC}"; exit 0' SIGINT SIGTERM
+cleanup() {
+    echo -e "\n${YELLOW}Stopping log capture...${NC}"
+    # Kill all background jobs (including tio/cat from process substitution)
+    jobs -p | xargs -r kill 2>/dev/null || true
+    # Also try killing the entire process group
+    kill -- -$$ 2>/dev/null || true
+    exit 0
+}
+trap cleanup SIGINT SIGTERM
 
 echo "=== ZMK USB Logging Capture ==="
 echo ""
@@ -144,9 +152,10 @@ echo "---"
 echo ""
 
 # Capture logs with appropriate tool
+# Using process substitution to avoid subshell and make trap work properly
 if command -v tio &> /dev/null; then
     # tio with timestamping, auto-reconnect, and log rotation
-    tio -t $DEVICE 2>&1 | while IFS= read -r line; do
+    while IFS= read -r line; do
         # Check log size and rotate if needed
         current_size=$(get_file_size_mb "$LOGFILE")
         if [ "$current_size" -ge "$MAX_LOG_SIZE_MB" ]; then
@@ -154,17 +163,17 @@ if command -v tio &> /dev/null; then
         fi
 
         echo "[$(date '+%Y-%m-%d %H:%M:%S.%3N')] $line" | tee -a "$LOGFILE"
-    done
+    done < <(tio -t $DEVICE 2>&1)
 else
     # Fallback to cat with timestamping and log rotation
     echo -e "${YELLOW}Using 'cat' fallback (timestamps may be less accurate)${NC}"
-    cat $DEVICE 2>&1 | while IFS= read -r line; do
+    while IFS= read -r line; do
         # Check log size and rotate if needed
         current_size=$(get_file_size_mb "$LOGFILE")
         if [ "$current_size" -ge "$MAX_LOG_SIZE_MB" ]; then
             rotate_log "$LOGFILE"
         fi
-
+capture-logs.sh
         echo "[$(date '+%Y-%m-%d %H:%M:%S.%3N')] $line" | tee -a "$LOGFILE"
-    done
+    done < <(cat $DEVICE 2>&1)
 fi
