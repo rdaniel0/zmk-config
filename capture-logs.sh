@@ -6,6 +6,7 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOGFILE="logs/zmk_${TIMESTAMP}.log"
 DEVICE="/dev/ttyACM0"
 MAX_LOG_SIZE_MB=10  # Rotate log when it reaches this size
+MAX_LOG_FILES=5     # Keep only this many log files (delete oldest)
 
 # Color codes for output
 RED='\033[0;31m'
@@ -127,6 +128,22 @@ get_file_size_mb() {
     fi
 }
 
+# Function to clean up old log files, keeping only MAX_LOG_FILES most recent
+cleanup_old_logs() {
+    local log_count=$(ls -1 logs/zmk_*.log 2>/dev/null | wc -l)
+
+    if [ "$log_count" -gt "$MAX_LOG_FILES" ]; then
+        local files_to_delete=$((log_count - MAX_LOG_FILES))
+        echo -e "${YELLOW}Cleaning up $files_to_delete old log file(s) (keeping $MAX_LOG_FILES most recent)${NC}"
+
+        # List files by modification time (oldest first), delete the oldest ones
+        ls -1t logs/zmk_*.log | tail -n "$files_to_delete" | while read -r old_file; do
+            echo -e "${YELLOW}  Deleting: $old_file${NC}"
+            rm -f "$old_file"
+        done
+    fi
+}
+
 # Function to rotate log file
 rotate_log() {
     local current_log="$1"
@@ -136,15 +153,23 @@ rotate_log() {
     echo ""
     echo -e "${BLUE}↻ Rotating log file (reached ${MAX_LOG_SIZE_MB}MB limit)${NC}"
     echo -e "${BLUE}  New file: $new_log${NC}"
+
+    # Clean up old logs after rotation
+    cleanup_old_logs
+
     echo ""
 
     LOGFILE="$new_log"
 }
 
+# Clean up old logs before starting (if we already have too many)
+cleanup_old_logs
+
 # Display capture info
 echo "Log file: $LOGFILE"
 echo "Device: $DEVICE"
 echo "Max log size: ${MAX_LOG_SIZE_MB}MB (will auto-rotate)"
+echo "Max log files: $MAX_LOG_FILES (will delete oldest)"
 echo ""
 echo -e "${GREEN}Starting log capture...${NC}"
 echo "Press Ctrl+C to stop"
