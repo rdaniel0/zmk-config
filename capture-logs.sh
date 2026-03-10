@@ -74,6 +74,11 @@ if [ ! -e "$DEVICE" ]; then
 fi
 
 echo -e "${GREEN}✓ Found device: $DEVICE${NC}"
+echo ""
+echo -e "${YELLOW}⚠ IMPORTANT: Make sure keyboard output is set to BLE, not USB${NC}"
+echo -e "${YELLOW}  Press the &out OUT_BLE key combo (OS_FnNumbers layer) if needed.${NC}"
+echo -e "${YELLOW}  This ensures keyboard data flows over BT while logs stream over USB.${NC}"
+echo -e "${YELLOW}  The setting persists across reboots - you only need to set it once.${NC}"
 
 # Check if we have permission to access the device
 if [ ! -r "$DEVICE" ] || [ ! -w "$DEVICE" ]; then
