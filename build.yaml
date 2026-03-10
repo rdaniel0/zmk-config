@@ -19,14 +19,14 @@
 #
 ---
 include:
-  - board: nice_nano
+  - board: nice_nano//zmk
     shield: dactyl_left
-  - board: nice_nano
+  - board: nice_nano//zmk
     shield: dactyl_right
-  - board: nice_nano
+  - board: nice_nano//zmk
     shield: dactyl_right
     snippet: zmk-usb-logging
     cmake-args: -DEXTRA_CONF_FILE=dactyl_logging.conf
     artifact-name: dactyl_right_logging
-  - board: nice_nano
+  - board: nice_nano//zmk
     shield: settings_reset
