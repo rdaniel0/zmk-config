@@ -4,9 +4,11 @@
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOGFILE="logs/zmk_${TIMESTAMP}.log"
+REPORT="logs/report.txt"
 DEVICE="/dev/ttyACM0"
 MAX_LOG_SIZE_MB=10  # Rotate log when it reaches this size
 MAX_LOG_FILES=5     # Keep only this many log files (delete oldest)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Color codes for output
 RED='\033[0;31m'
@@ -20,6 +22,14 @@ cleanup() {
     echo -e "\n${YELLOW}Stopping log capture...${NC}"
     # Kill all background jobs (including tio/cat from process substitution)
     jobs -p | xargs -r kill 2>/dev/null || true
+
+    # Generate analysis report
+    if [ -f "$LOGFILE" ]; then
+        echo -e "${BLUE}Generating analysis report...${NC}"
+        "$SCRIPT_DIR/analyze-log.sh" "$LOGFILE" "$REPORT"
+        echo -e "${GREEN}Report: $REPORT${NC}"
+    fi
+
     # Also try killing the entire process group
     kill -- -$$ 2>/dev/null || true
     exit 0
@@ -176,6 +186,9 @@ echo "Device: $DEVICE"
 echo "Max log size: ${MAX_LOG_SIZE_MB}MB (will auto-rotate)"
 echo "Max log files: $MAX_LOG_FILES (will delete oldest)"
 echo ""
+# Wipe previous report
+rm -f "$REPORT"
+
 echo -e "${GREEN}Starting log capture...${NC}"
 echo "Press Ctrl+C to stop"
 echo "---"
@@ -203,7 +216,7 @@ else
         if [ "$current_size" -ge "$MAX_LOG_SIZE_MB" ]; then
             rotate_log "$LOGFILE"
         fi
-capture-logs.sh
+
         echo "[$(date '+%Y-%m-%d %H:%M:%S.%3N')] $line" | tee -a "$LOGFILE"
     done < <(cat $DEVICE 2>&1)
 fi
