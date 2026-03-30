@@ -117,40 +117,78 @@ buffer never flushed the rest.
 - 2 BLE disconnects (both reason 0x08 = supervision timeout, both reconnected)
 - No reboots
 
-### Comparison with March 24 freeze
+## Log Analysis (2026-03-30, second capture) — Third freeze
 
-| | March 24 | March 30 |
-|---|---|---|
-| Uptime at freeze | 12:07:32 | 31:48:21 |
-| Last function | `position_state_changed_listener` | `position_state_changed_listener` |
-| Trigger | peripheral release after combo timeout | peripheral release after combo timeout |
-| Stuck key | position 18 (local kscan) | position 2 (peripheral) |
-| Preceding event | `combo_timeout_handler: ABOUT TO UPDATE` | `combo_timeout_handler: ABOUT TO UPDATE` |
-| MPU fault logged | No | No |
-| Log truncation | Clean line ending | Mid-line truncation |
+~2-hour session captured with USB monitoring enabled.
 
-The pattern is identical: **combo timeout fires, followed by a peripheral release
-notification, and the MCU freezes in `position_state_changed_listener`**.
+### Freeze Sequence
 
-## Emerging Theory
+Different from previous freezes — no combo timeout involvement:
 
-The `combo_timeout_handler: ABOUT TO UPDATE IN TIMEOUT` message appears
-immediately before both freezes. This is a delayed work item on the system
-workqueue. The sequence suggests:
+1. Normal typing: position 18 (local kscan, 'e') pressed and released cleanly
+2. **1.6s gap** (idle)
+3. Peripheral notification: position 31 (mod_tap/space) press
+4. Hold-tap decides tap (balanced decision moment key-up)
+5. `on_keymap_binding_pressed: position 31 keycode 0x7002C` — HID report sent
+6. `on_keymap_binding_released: position 31 keycode 0x7002C` — HID report sent
+7. `on_hold_tap_binding_released: 31 cleaning up hold-tap` — **last log line**
 
-1. Combo timeout work item runs, processes the timeout
-2. A peripheral BLE notification arrives (queued during combo processing)
-3. The peripheral event work item starts processing
-4. MCU dies during `position_state_changed_listener` for the peripheral release
+Log ended cleanly (no mid-line truncation). No stuck keys. MCU just stopped
+producing output after a completed hold-tap release.
 
-The combo timeout handler's "ABOUT TO UPDATE" step may be corrupting state
-that `position_state_changed_listener` subsequently reads, or the deep call
-stack at this point (combo cleanup + peripheral event + listener dispatch)
-may be overflowing the system workqueue stack despite the increase to 2560 bytes.
+### Session Stats
 
-The mid-line log truncation in the March 30 capture strongly suggests a hard
-fault or watchdog reset rather than an infinite loop — the CPU stopped executing
-abruptly.
+- 166,060 log lines over ~2 hours (05:40:17 uptime)
+- 14,551 HID reports, 3,350 thread analyzer snapshots
+- 0 errors or warnings, 0 BLE disconnects
+- No USB events until the freeze itself
+
+### Thread Analyzer (consistent with previous captures)
+
+- **logging** at 84% (120 bytes free) `***`
+- **sysworkq** at 61% (984 bytes free)
+- No thread growth detected — all values identical to previous session
+
+### Comparison across all freezes
+
+| | March 24 | Mar 30 (1st) | Mar 30 (2nd) |
+|---|---|---|---|
+| Uptime at freeze | 12:07:32 | 31:48:21 | 05:40:17 |
+| Last function | `position_state_changed_listener` | `position_state_changed_listener` | `on_hold_tap_binding_released` |
+| Combo timeout before | Yes | Yes | **No** |
+| Stuck key | Yes (pos 18) | Yes (pos 2) | **No** |
+| Log truncation | Clean end | Mid-line | Clean end |
+| MPU fault | No | No | No |
+| USB disconnect | No | No | **Yes (MCU rebooted)** |
+
+## Revised Theory
+
+The combo timeout is **not** the sole trigger — the third freeze had no combo
+involvement at all. The common thread across all three freezes:
+
+1. **All involve peripheral (left half) BLE events** being processed on the
+   central's system workqueue
+2. **The logging thread is critically close to overflow** (84%, 120 bytes free)
+   across all sessions — consistent, not growing
+3. **No MPU fault is ever logged**, suggesting either the fault handler can't
+   run (stack overflow in ISR context?) or a watchdog is resetting the MCU
+
+The third freeze also revealed a **USB re-enumeration** (device number 40 → 41),
+meaning the MCU actually **rebooted** rather than just hanging. This is new —
+previous freezes left the USB device enumerated but unresponsive.
+
+## Firmware Change: Doubled Stack Sizes (commit 1d17436)
+
+To test the stack overflow hypothesis:
+
+```
+CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE=4096     # was 2560 (61% used / 984 free)
+CONFIG_LOG_PROCESS_THREAD_STACK_SIZE=1536   # was 768 (84% used / 120 free)
+```
+
+If freezes persist with these changes, stack overflow can be ruled out and
+investigation should focus on the BLE peripheral event processing code path
+itself.
 
 ## Thread Analyzer Data (last snapshot before freeze)
 
@@ -171,16 +209,14 @@ thread overflowed while formatting the debug message. The sysworkq has 1056
 bytes unused in the high watermark, but the freeze may push it deeper than
 any prior call.
 
-## Gaps / Next Steps
+## Next Steps
 
-- **Thread analyzer data**: the March 30 session had `CONFIG_THREAD_ANALYZER`
-  enabled — check the raw log for stack high watermarks before the freeze
-- **Combo "ABOUT TO UPDATE" code path**: investigate what this does in the ZMK
-  combo source — is it modifying global state that the next event reads?
-- **Stack overflow hypothesis**: the system workqueue stack (2560 bytes) may not
-  be enough when combo timeout + peripheral event processing overlap on the call
-  stack. Try increasing to 4096.
+- **Test with doubled stacks** (commit 1d17436) — if freezes stop, it was stack
+  overflow. If they persist, rule it out.
 - **Retained memory**: enable `CONFIG_RETAINED_MEM` to persist fault info across
   resets, since USB logging can't capture the fault handler output
-- **Watchdog**: check if Zephyr's watchdog is resetting the MCU (would explain
-  no fault output)
+- **Watchdog**: check if Zephyr's watchdog is resetting the MCU — the USB
+  re-enumeration in the third freeze suggests a reset rather than a hang
+- **BLE peripheral event path**: if stacks are ruled out, focus investigation
+  on `split_central_notify_func` → `peripheral_event_work_callback` →
+  `position_state_changed_listener` code path
