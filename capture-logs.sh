@@ -2,13 +2,14 @@
 # ZMK USB Logging Capture Script
 # Usage: ./capture-logs.sh
 
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-LOGFILE="logs/zmk_${TIMESTAMP}.log"
-REPORT="logs/report.txt"
 DEVICE="/dev/ttyACM0"
-MAX_LOG_SIZE_MB=10  # Rotate log when it reaches this size
+LOGFILE=""
+USB_LOG=""
 MAX_LOG_FILES=5     # Keep only this many log files (delete oldest)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PID_FILE="logs/capture.pid"
+CHILD_PID=""
+USB_MONITOR_PID=""
 
 # Color codes for output
 RED='\033[0;31m'
@@ -17,24 +18,120 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Trap Ctrl+C and cleanup
-cleanup() {
-    echo -e "\n${YELLOW}Stopping log capture...${NC}"
-    # Kill all background jobs (including tio/cat from process substitution)
-    jobs -p | xargs -r kill 2>/dev/null || true
-
-    # Generate analysis report
+# Stop current script/tio child and strip ANSI from its log
+stop_child() {
+    if [ -n "$CHILD_PID" ] && kill -0 "$CHILD_PID" 2>/dev/null; then
+        kill "$CHILD_PID" 2>/dev/null
+        wait "$CHILD_PID" 2>/dev/null
+    fi
+    # Strip ANSI escape codes and script header/footer now that script is done writing
     if [ -f "$LOGFILE" ]; then
-        echo -e "${BLUE}Generating analysis report...${NC}"
-        "$SCRIPT_DIR/analyze-log.sh" "$LOGFILE" "$REPORT"
-        echo -e "${GREEN}Report: $REPORT${NC}"
+        sed -i 's/\x1b\[[0-9;]*m//g; s/\r//g' "$LOGFILE"
+        sed -i '/^Script started on/d; /^Script done on/d' "$LOGFILE"
+    fi
+}
+
+# Monitor USB connection status and kernel events for the device.
+# Writes timestamped events to a sidecar log alongside the serial capture.
+start_usb_monitor() {
+    # Find the USB bus path for our device (e.g. "1-1.3")
+    local usb_path
+    usb_path=$(udevadm info "$DEVICE" 2>/dev/null | grep -oP 'usb\d+/\K[0-9.-]+(?=/)' | head -1)
+    if [ -z "$usb_path" ]; then
+        echo -e "${YELLOW}Could not determine USB bus path — USB monitoring disabled${NC}"
+        return
     fi
 
-    # Also try killing the entire process group
-    kill -- -$$ 2>/dev/null || true
-    exit 0
+    USB_LOG="${LOGFILE%.log}_usb.log"
+    echo "[$(date '+%H:%M:%S')] USB monitor started for $DEVICE (bus $usb_path)" > "$USB_LOG"
+    echo "[$(date '+%H:%M:%S')] USB device: $(lsusb -d 1d50:615e 2>/dev/null)" >> "$USB_LOG"
+
+    (
+        # Stream kernel USB events for this device
+        journalctl -k -f --no-pager -g "$usb_path" 2>/dev/null | while IFS= read -r line; do
+            echo "[$(date '+%H:%M:%S')] KERNEL: $line" >> "$USB_LOG"
+            # Also print to terminal for visibility
+            echo -e "${RED}[USB] $line${NC}"
+        done
+    ) &
+    USB_MONITOR_PID=$!
+
+    # Periodic device health check (every 60s)
+    (
+        while true; do
+            sleep 60
+            if [ -e "$DEVICE" ]; then
+                # Check if device is still enumerated
+                if lsusb -d 1d50:615e >/dev/null 2>&1; then
+                    echo "[$(date '+%H:%M:%S')] POLL: device present" >> "$USB_LOG"
+                else
+                    echo "[$(date '+%H:%M:%S')] POLL: DEVICE MISSING from lsusb!" >> "$USB_LOG"
+                    echo -e "${RED}[USB] Device disappeared from lsusb!${NC}"
+                fi
+            else
+                echo "[$(date '+%H:%M:%S')] POLL: $DEVICE node gone!" >> "$USB_LOG"
+                echo -e "${RED}[USB] $DEVICE no longer exists!${NC}"
+            fi
+        done
+    ) &
+    USB_POLL_PID=$!
 }
-trap cleanup SIGINT SIGTERM
+
+stop_usb_monitor() {
+    [ -n "$USB_MONITOR_PID" ] && kill "$USB_MONITOR_PID" 2>/dev/null
+    [ -n "$USB_POLL_PID" ] && kill "$USB_POLL_PID" 2>/dev/null
+    # Strip ANSI from USB log too
+    [ -f "$USB_LOG" ] && sed -i 's/\x1b\[[0-9;]*m//g; s/\r//g' "$USB_LOG"
+}
+
+# Start a new capture child with a fresh log file
+start_child() {
+    LOGFILE="logs/zmk_$(date +%Y%m%d_%H%M%S).log"
+    if command -v tio &> /dev/null; then
+        script -q "$LOGFILE" -c "tio -t $DEVICE" &
+        CHILD_PID=$!
+    else
+        script -q "$LOGFILE" -c "cat $DEVICE" &
+        CHILD_PID=$!
+    fi
+    start_usb_monitor
+    echo -e "${GREEN}Log file: $LOGFILE${NC}"
+}
+
+# SIGUSR1: generate report on current log, then start fresh log
+generate_report_and_rotate() {
+    stop_usb_monitor
+    stop_child
+    if [ -f "$LOGFILE" ] && [ -s "$LOGFILE" ]; then
+        echo -e "\n${BLUE}Generating analysis report...${NC}"
+        local report="logs/report_$(date +%Y%m%d_%H%M%S).txt"
+        "$SCRIPT_DIR/analyze-log.sh" "$LOGFILE" "$report"
+        echo -e "${GREEN}Report: $report${NC}"
+    fi
+    start_child
+}
+trap generate_report_and_rotate USR1
+
+# Ctrl+C / SIGTERM: request stop. The wait loop checks this flag.
+STOP_REQUESTED=0
+trap 'STOP_REQUESTED=1' INT TERM
+
+# Cleanup on exit: stop child, generate final report
+cleanup() {
+    echo -e "\n${YELLOW}Stopping log capture...${NC}"
+    stop_usb_monitor
+    stop_child
+
+    if [ -f "$LOGFILE" ] && [ -s "$LOGFILE" ]; then
+        echo -e "${BLUE}Generating final report...${NC}"
+        local report="logs/report_$(date +%Y%m%d_%H%M%S).txt"
+        "$SCRIPT_DIR/analyze-log.sh" "$LOGFILE" "$report"
+        echo -e "${GREEN}Report: $report${NC}"
+    fi
+
+    rm -f "$PID_FILE"
+}
+trap cleanup EXIT
 
 echo "=== ZMK USB Logging Capture ==="
 echo ""
@@ -133,16 +230,6 @@ if [ ! -r "$DEVICE" ] || [ ! -w "$DEVICE" ]; then
     echo ""
 fi
 
-# Function to get file size in MB
-get_file_size_mb() {
-    if [ -f "$1" ]; then
-        local size_bytes=$(stat -c%s "$1" 2>/dev/null || stat -f%z "$1" 2>/dev/null)
-        echo $((size_bytes / 1048576))
-    else
-        echo 0
-    fi
-}
-
 # Function to clean up old log files, keeping only MAX_LOG_FILES most recent
 cleanup_old_logs() {
     local log_count=$(ls -1 logs/zmk_*.log 2>/dev/null | wc -l)
@@ -159,64 +246,29 @@ cleanup_old_logs() {
     fi
 }
 
-# Function to rotate log file
-rotate_log() {
-    local current_log="$1"
-    local new_timestamp=$(date +%Y%m%d_%H%M%S)
-    local new_log="logs/zmk_${new_timestamp}.log"
-
-    echo ""
-    echo -e "${BLUE}↻ Rotating log file (reached ${MAX_LOG_SIZE_MB}MB limit)${NC}"
-    echo -e "${BLUE}  New file: $new_log${NC}"
-
-    # Clean up old logs after rotation
-    cleanup_old_logs
-
-    echo ""
-
-    LOGFILE="$new_log"
-}
-
 # Clean up old logs before starting (if we already have too many)
 cleanup_old_logs
 
 # Display capture info
-echo "Log file: $LOGFILE"
 echo "Device: $DEVICE"
-echo "Max log size: ${MAX_LOG_SIZE_MB}MB (will auto-rotate)"
 echo "Max log files: $MAX_LOG_FILES (will delete oldest)"
 echo ""
-# Wipe previous report
-rm -f "$REPORT"
 
 echo -e "${GREEN}Starting log capture...${NC}"
-echo "Press Ctrl+C to stop"
+echo "Press Ctrl+C to stop and generate report"
+echo "Run ./generate-report.sh to generate report without stopping (mouse-friendly)"
 echo "---"
 echo ""
 
-# Capture logs with appropriate tool
-# Using process substitution to avoid subshell and make trap work properly
-if command -v tio &> /dev/null; then
-    # tio with timestamping, auto-reconnect, and log rotation
-    while IFS= read -r line; do
-        # Check log size and rotate if needed
-        current_size=$(get_file_size_mb "$LOGFILE")
-        if [ "$current_size" -ge "$MAX_LOG_SIZE_MB" ]; then
-            rotate_log "$LOGFILE"
-        fi
+# Write PID file for generate-report.sh
+echo $$ > "$PID_FILE"
 
-        echo "[$(date '+%Y-%m-%d %H:%M:%S.%3N')] $line" | tee -a "$LOGFILE"
-    done < <(tio -t $DEVICE 2>&1)
-else
-    # Fallback to cat with timestamping and log rotation
-    echo -e "${YELLOW}Using 'cat' fallback (timestamps may be less accurate)${NC}"
-    while IFS= read -r line; do
-        # Check log size and rotate if needed
-        current_size=$(get_file_size_mb "$LOGFILE")
-        if [ "$current_size" -ge "$MAX_LOG_SIZE_MB" ]; then
-            rotate_log "$LOGFILE"
-        fi
+# Start capture: `script` gives tio a real PTY (tio exits if stdout is a pipe).
+# Runs in background; `wait` is signal-interruptible unlike `read`.
+start_child
 
-        echo "[$(date '+%Y-%m-%d %H:%M:%S.%3N')] $line" | tee -a "$LOGFILE"
-    done < <(cat $DEVICE 2>&1)
-fi
+# wait loop: re-waits after SIGUSR1 (report request), exits on INT/TERM
+while kill -0 "$CHILD_PID" 2>/dev/null; do
+    wait "$CHILD_PID" 2>/dev/null
+    [ "$STOP_REQUESTED" -eq 1 ] && break
+done
