@@ -98,16 +98,21 @@ start_child() {
     echo -e "${GREEN}Log file: $LOGFILE${NC}"
 }
 
-# SIGUSR1: generate report on current log, then start fresh log
-generate_report_and_rotate() {
-    stop_usb_monitor
-    stop_child
+# Generate report on current log without stopping capture
+generate_report() {
     if [ -f "$LOGFILE" ] && [ -s "$LOGFILE" ]; then
         echo -e "\n${BLUE}Generating analysis report...${NC}"
         local report="logs/report_$(date +%Y%m%d_%H%M%S).txt"
         "$SCRIPT_DIR/analyze-log.sh" "$LOGFILE" "$report"
         echo -e "${GREEN}Report: $report${NC}"
     fi
+}
+
+# SIGUSR1: generate report on current log, then start fresh log
+generate_report_and_rotate() {
+    stop_usb_monitor
+    stop_child
+    generate_report
     start_child
 }
 trap generate_report_and_rotate USR1
@@ -256,7 +261,7 @@ echo ""
 
 echo -e "${GREEN}Starting log capture...${NC}"
 echo "Press Ctrl+C to stop and generate report"
-echo "Run ./generate-report.sh to generate report without stopping (mouse-friendly)"
+echo "Run ./generate-report.sh from another terminal to rotate log and generate report"
 echo "---"
 echo ""
 
@@ -267,8 +272,13 @@ echo $$ > "$PID_FILE"
 # Runs in background; `wait` is signal-interruptible unlike `read`.
 start_child
 
-# wait loop: re-waits after SIGUSR1 (report request), exits on INT/TERM
+# Wait for Enter (or Ctrl+C / SIGTERM) to stop capture.
+# `read -t 1` polls with a 1-second timeout to also check child liveness.
+echo "Press Enter or Ctrl+C to stop and generate report"
+echo ""
 while kill -0 "$CHILD_PID" 2>/dev/null; do
-    wait "$CHILD_PID" 2>/dev/null
+    if read -t 1 -r input 2>/dev/null; then
+        break
+    fi
     [ "$STOP_REQUESTED" -eq 1 ] && break
 done
