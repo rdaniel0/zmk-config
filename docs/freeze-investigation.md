@@ -209,14 +209,130 @@ thread overflowed while formatting the debug message. The sysworkq has 1056
 bytes unused in the high watermark, but the freeze may push it deeper than
 any prior call.
 
+## Log Analysis (2026-03-31) — Fourth freeze (new firmware with doubled stacks)
+
+Firmware with `CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE=4096` and
+`CONFIG_LOG_PROCESS_THREAD_STACK_SIZE=1536` (commit 1d17436).
+
+### Stack overflow ruled out
+
+Thread analyzer confirms ample headroom on all threads:
+
+| Thread | Used | Total | Free | Usage % |
+|--------|------|-------|------|---------|
+| sysworkq | 1488 | 4096 | **2608** | 36% |
+| logging | 648 | 1536 | **888** | 42% |
+
+No threads near overflow. No growth. **Doubling the stacks made no difference —
+the freeze is not caused by stack overflow.**
+
+### Freeze Sequence — identical pattern
+
+1. `combo_timeout_handler: ABOUT TO UPDATE IN TIMEOUT` (after position 11 release)
+2. Peripheral notification: position 13 press → captured by combo
+3. Combo times out, releases position 13, HID report sent
+4. `combo_timeout_handler: ABOUT TO UPDATE IN TIMEOUT`
+5. **Dead.** Log ends cleanly, no truncation.
+
+### Session Stats
+
+- 136,509 log lines over ~3 hours (17:15:26 uptime)
+- 11,649 HID reports, 4,893 thread analyzer snapshots
+- 0 errors/warnings, 0 BLE disconnects, no USB events
+- Stuck key: position 13 (keycode `0x70016` / 's')
+
+### Updated comparison across all freezes
+
+| | Mar 24 | Mar 30 (1st) | Mar 30 (2nd) | **Mar 31** |
+|---|---|---|---|---|
+| Firmware | original | original | original | **doubled stacks** |
+| Uptime | 12:07:32 | 31:48:21 | 05:40:17 | **17:15:26** |
+| Last log line | `position_state_changed_listener` | `position_state_changed_listener` | `on_hold_tap_binding_released` | **`combo_timeout_handler: ABOUT TO UPDATE`** |
+| Combo timeout before | Yes | Yes | No | **Yes** |
+| Stuck key | Yes | Yes | No | **Yes** |
+| Log truncation | Clean | Mid-line | Clean | **Clean** |
+| USB disconnect | No | No | Yes (reboot) | **No** |
+| sysworkq headroom | 1056 | 984 | 984 | **2608** |
+| logging headroom | 120 | 120 | 120 | **888** |
+
+## Confirmed Root Cause Area: `combo_timeout_handler`
+
+3 of 4 freezes end with `combo_timeout_handler: ABOUT TO UPDATE IN TIMEOUT` as
+the last log line. The code that executes **after** this log message is the crash
+site. The one freeze without combo involvement (Mar 30 2nd) may have been a
+different trigger or a race in the same code.
+
+## Source Code Analysis: `combo.c` crash site
+
+The freeze occurs at `combo_timeout_handler` (combo.c:475) → `update_timeout_task`
+(combo.c:486). Two bugs identified:
+
+### Bug 1: LONG_MAX vs LLONG_MAX type mismatch
+
+`first_candidate_timeout()` (line 206) returns `LONG_MAX` as its "no timeout"
+sentinel. `update_timeout_task()` (line 411) checks `if (first_timeout == LLONG_MAX)`.
+
+On 32-bit ARM (nRF52840): `LONG_MAX` = 2^31-1, `LLONG_MAX` = 2^63-1. These are
+**never equal**, so the cancel path is never taken. Instead, `k_work_schedule` is
+called with `K_MSEC(LONG_MAX - k_uptime_get())` — a huge far-future timer. After
+~25 days of uptime this goes negative.
+
+This bug is wasteful (schedules a spurious timer) but may not directly cause the
+crash at shorter uptimes.
+
+### Bug 2: Re-entrant combo state modification (likely crash cause)
+
+The `combo_timeout_handler` flow is:
+
+```
+combo_timeout_handler()
+  → cleanup()
+    → release_pressed_keys()
+      → ZMK_EVENT_RELEASE / ZMK_EVENT_RAISE  (synchronous!)
+        → event_manager dispatches to all listeners
+          → position_state_changed_listener()  (RE-ENTRANT!)
+            → position_state_down()
+              → capture_pressed_key()  (modifies pressed_keys[])
+              → update_timeout_task()  (modifies timeout_task_timeout_at)
+  → update_timeout_task()  (reads stale/corrupted state)
+```
+
+When `cleanup()` → `release_pressed_keys()` re-raises captured position events,
+those events are dispatched **synchronously** through the event manager back into
+the combo listener. If a re-raised event triggers `position_state_down`, it
+modifies the same global state (`pressed_keys[]`, `candidates[]`,
+`timeout_task_timeout_at`) that `combo_timeout_handler` is in the middle of using.
+
+When control returns to `combo_timeout_handler` line 486, the state it relies on
+has been modified out from under it by the re-entrant call. `update_timeout_task`
+may then:
+- Read stale `pressed_keys[0].data.timestamp` values
+- Compute a negative timeout
+- Schedule a work item with undefined delay
+- Trigger a Zephyr kernel fault
+
+This explains why the freeze:
+- Always involves combos (the re-entrancy is combo-specific)
+- Sometimes involves peripheral events (they contribute captured keys that
+  get re-raised)
+- Sometimes truncates the log mid-line (hard fault) vs clean end (infinite
+  reschedule loop)
+
+### Related ZMK issues
+
+- **zmkfirmware/zmk#3100**: Sticky shift + combo → hold-tap → macro crash (open)
+- **zmkfirmware/zmk#3262**: Dongle crash traced to commit `9e36ebd` (open)
+- **zmkfirmware/zmk#1944/#1945**: Previous combo timeout fix (closed)
+- No existing issue reports the LONG_MAX/LLONG_MAX mismatch
+
 ## Next Steps
 
-- **Test with doubled stacks** (commit 1d17436) — if freezes stop, it was stack
-  overflow. If they persist, rule it out.
-- **Retained memory**: enable `CONFIG_RETAINED_MEM` to persist fault info across
-  resets, since USB logging can't capture the fault handler output
-- **Watchdog**: check if Zephyr's watchdog is resetting the MCU — the USB
-  re-enumeration in the third freeze suggests a reset rather than a hang
-- **BLE peripheral event path**: if stacks are ruled out, focus investigation
-  on `split_central_notify_func` → `peripheral_event_work_callback` →
-  `position_state_changed_listener` code path
+- **Fix LONG_MAX → LLONG_MAX** in `first_candidate_timeout()` (lines 206, 209)
+- **Add defensive delay check** in `update_timeout_task()` to guard against
+  negative timeouts
+- **File upstream issue** on zmkfirmware/zmk with this analysis
+- **Enable `CONFIG_ASSERT=y`** to catch the `pressed_keys_count > 0` assertion
+  in `filter_timed_out_candidates` — if the re-entrancy theory is correct, this
+  assertion may fire and give us a stack trace
+- **Consider `CONFIG_RETAINED_MEM`** to capture fault info across resets
+- **Reduce stack sizes back** to defaults since overflow is ruled out
