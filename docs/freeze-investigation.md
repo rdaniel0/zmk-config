@@ -373,16 +373,16 @@ Evidence against:
 Both bugs are real and should be fixed upstream regardless. Testing them
 one at a time to determine which (or both) causes the freeze.
 
-### Round 1: Fix Bug 1 only (LONG_MAX → LLONG_MAX) — current
+### Round 1: Fix Bug 1 only (LONG_MAX → LLONG_MAX) — DONE, freeze persists
 
-Change `first_candidate_timeout()` lines 206, 209 from `LONG_MAX` to `LLONG_MAX`
-to match the sentinel check in `update_timeout_task()` line 411. One-line fix,
-unambiguously correct, easy to isolate.
+Applied LLONG_MAX fix to fork (rdaniel0/zmk#fix/combo-long-max). Freeze
+occurred after only 17 minutes (2026-03-31 22:50). Same pattern:
+`combo_timeout_handler: ABOUT TO UPDATE` → events processed → dead.
 
-- If freeze **stops**: Bug 1 was the cause.
-- If freeze **persists**: Bug 1 was real but not the crash cause. Move to Round 2.
+**Result: Bug 1 is not the crash cause.** The fix is still correct and should
+go upstream, but it doesn't explain our freeze.
 
-### Round 2: Add CONFIG_ASSERT=y (test Bug 2)
+### Round 2: Add CONFIG_ASSERT=y (test Bug 2) — current
 
 Keep the Bug 1 fix and enable assertions. combo.c:231 has
 `__ASSERT(pressed_keys_count > 0)` in `filter_timed_out_candidates`. If
