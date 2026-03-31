@@ -265,24 +265,39 @@ different trigger or a race in the same code.
 ## Source Code Analysis: `combo.c` crash site
 
 The freeze occurs at `combo_timeout_handler` (combo.c:475) → `update_timeout_task`
-(combo.c:486). Two bugs identified:
+(combo.c:486). Two bugs identified, with two competing theories about which is the
+primary crash cause.
 
-### Bug 1: LONG_MAX vs LLONG_MAX type mismatch
+### Bug 1: LONG_MAX vs LLONG_MAX type mismatch (sentinel value)
 
-`first_candidate_timeout()` (line 206) returns `LONG_MAX` as its "no timeout"
+`first_candidate_timeout()` (line 206, 209) returns `LONG_MAX` as its "no timeout"
 sentinel. `update_timeout_task()` (line 411) checks `if (first_timeout == LLONG_MAX)`.
 
-On 32-bit ARM (nRF52840): `LONG_MAX` = 2^31-1, `LLONG_MAX` = 2^63-1. These are
-**never equal**, so the cancel path is never taken. Instead, `k_work_schedule` is
-called with `K_MSEC(LONG_MAX - k_uptime_get())` — a huge far-future timer. After
-~25 days of uptime this goes negative.
+On 32-bit ARM (nRF52840): `LONG_MAX` = 2^31-1 (2,147,483,647), `LLONG_MAX` =
+2^63-1. These are **never equal**, so the cancel-and-return path is dead code.
 
-This bug is wasteful (schedules a spurious timer) but may not directly cause the
-crash at shorter uptimes.
+The consequence: when there are no combo candidates (after cleanup, or when
+`pressed_keys_count == 0`), instead of cancelling the timer, the code falls through
+to:
 
-### Bug 2: Re-entrant combo state modification (likely crash cause)
+```c
+k_work_schedule(&timeout_task, K_MSEC(first_timeout - k_uptime_get()));
+//                                     2,147,483,647 - uptime_ms
+```
 
-The `combo_timeout_handler` flow is:
+The delta (~2 billion ms) is converted to kernel ticks via `K_MSEC()`. At
+`CONFIG_SYS_CLOCK_TICKS_PER_SEC=32768` (nRF52840 default):
+`~2,086,000,000 * 32768 / 1000 ≈ 68 trillion ticks` — this **overflows** any
+32-bit intermediate in the tick conversion macro, potentially producing a
+negative or zero timeout. A zero/negative timeout causes the work to fire
+immediately, re-entering `combo_timeout_handler` in a tight loop.
+
+After ~24.8 days of uptime, `LONG_MAX - k_uptime_get()` itself goes negative,
+which may cause `K_MSEC()` to produce undefined behaviour.
+
+### Bug 2: Re-entrant combo state modification
+
+The `combo_timeout_handler` flow involves synchronous event dispatch:
 
 ```
 combo_timeout_handler()
@@ -294,7 +309,7 @@ combo_timeout_handler()
             → position_state_down()
               → capture_pressed_key()  (modifies pressed_keys[])
               → update_timeout_task()  (modifies timeout_task_timeout_at)
-  → update_timeout_task()  (reads stale/corrupted state)
+  → update_timeout_task()  (reads potentially stale state)
 ```
 
 When `cleanup()` → `release_pressed_keys()` re-raises captured position events,
@@ -304,19 +319,47 @@ modifies the same global state (`pressed_keys[]`, `candidates[]`,
 `timeout_task_timeout_at`) that `combo_timeout_handler` is in the middle of using.
 
 When control returns to `combo_timeout_handler` line 486, the state it relies on
-has been modified out from under it by the re-entrant call. `update_timeout_task`
-may then:
-- Read stale `pressed_keys[0].data.timestamp` values
-- Compute a negative timeout
+has been modified by the re-entrant call. `update_timeout_task` may then:
+- Read `pressed_keys[0].data.timestamp` values written by the re-entrant path
+- Compute a negative timeout if the re-entrant path altered `candidates[]`
 - Schedule a work item with undefined delay
 - Trigger a Zephyr kernel fault
 
-This explains why the freeze:
-- Always involves combos (the re-entrancy is combo-specific)
+### Which bug causes the freeze? Two theories
+
+**Theory A: Tick overflow via LONG_MAX sentinel (Bug 1 primary)**
+
+Every time `combo_timeout_handler` fires and cleans up (no remaining candidates),
+Bug 1 causes `update_timeout_task` to schedule with a ~2 billion ms delay. If the
+`K_MSEC()` tick conversion overflows to zero or negative, the work fires
+immediately, creating an infinite tight loop on the system workqueue. This starves
+all other work (BLE, HID, logging) — explaining the freeze with no fault logged.
+
+Evidence for:
+- 3 of 4 freezes end exactly at "ABOUT TO UPDATE IN TIMEOUT" → `update_timeout_task`
+- No MPU fault or assertion — consistent with an infinite loop, not a memory fault
+- Clean log endings (no mid-line truncation in 3 of 4) — the MCU is alive but busy
+
+Evidence against:
+- The bug fires on every combo timeout, not just at the freeze moment — so why
+  doesn't it freeze every time? Possibly depends on tick arithmetic edge cases.
+
+**Theory B: Re-entrant state corruption (Bug 2 primary)**
+
+The synchronous event dispatch creates a re-entrancy window where
+`update_timeout_task` operates on state modified by a nested `position_state_down`
+call. The corrupted state produces a bad timeout value → kernel fault or loop.
+
+Evidence for:
+- All freezes involve the combo/event processing path
 - Sometimes involves peripheral events (they contribute captured keys that
-  get re-raised)
-- Sometimes truncates the log mid-line (hard fault) vs clean end (infinite
-  reschedule loop)
+  get re-raised back through the combo listener)
+- Sometimes truncates log mid-line (hard fault) vs clean end (loop)
+
+Evidence against:
+- Re-entrancy is by design in ZMK's single-threaded event model — `release_pressed_keys`
+  is called from `cleanup` in multiple places, not just the timeout handler
+- Mar 30 (2nd) freeze had no combo involvement at all
 
 ### Related ZMK issues
 
@@ -325,14 +368,40 @@ This explains why the freeze:
 - **zmkfirmware/zmk#1944/#1945**: Previous combo timeout fix (closed)
 - No existing issue reports the LONG_MAX/LLONG_MAX mismatch
 
-## Next Steps
+## Plan: Isolate which bug causes the freeze
 
-- **Fix LONG_MAX → LLONG_MAX** in `first_candidate_timeout()` (lines 206, 209)
-- **Add defensive delay check** in `update_timeout_task()` to guard against
-  negative timeouts
-- **File upstream issue** on zmkfirmware/zmk with this analysis
-- **Enable `CONFIG_ASSERT=y`** to catch the `pressed_keys_count > 0` assertion
-  in `filter_timed_out_candidates` — if the re-entrancy theory is correct, this
-  assertion may fire and give us a stack trace
-- **Consider `CONFIG_RETAINED_MEM`** to capture fault info across resets
-- **Reduce stack sizes back** to defaults since overflow is ruled out
+Both bugs are real and should be fixed upstream regardless. Testing them
+one at a time to determine which (or both) causes the freeze.
+
+### Round 1: Fix Bug 1 only (LONG_MAX → LLONG_MAX) — current
+
+Change `first_candidate_timeout()` lines 206, 209 from `LONG_MAX` to `LLONG_MAX`
+to match the sentinel check in `update_timeout_task()` line 411. One-line fix,
+unambiguously correct, easy to isolate.
+
+- If freeze **stops**: Bug 1 was the cause.
+- If freeze **persists**: Bug 1 was real but not the crash cause. Move to Round 2.
+
+### Round 2: Add CONFIG_ASSERT=y (test Bug 2)
+
+Keep the Bug 1 fix and enable assertions. combo.c:231 has
+`__ASSERT(pressed_keys_count > 0)` in `filter_timed_out_candidates`. If
+re-entrant event dispatch corrupts combo state, this should fire and produce
+a stack trace.
+
+- If assertion **fires**: Bug 2 confirmed with evidence.
+- If freeze **persists without assertion**: Re-entrancy occurs in a path that
+  doesn't hit this assertion. Add targeted logging in `update_timeout_task`.
+
+### Round 3: If both fixed but freeze persists
+
+Both bugs were real but the freeze has a different root cause. Next steps:
+- Add LOG_ERR inside `update_timeout_task` to print `first_timeout`, uptime,
+  and computed delay before `k_work_schedule`
+- Enable `CONFIG_RETAINED_MEM` to persist fault info across resets
+- Reduce stack sizes back to defaults since overflow is ruled out
+
+### Upstream
+
+File issue on zmkfirmware/zmk with the full analysis — both bugs exist in the
+codebase regardless of which causes our specific freeze.

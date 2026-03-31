@@ -2,10 +2,12 @@ manifest:
   remotes:
     - name: zmkfirmware
       url-base: https://github.com/zmkfirmware
+    - name: rdaniel0
+      url-base: https://github.com/rdaniel0
   projects:
     - name: zmk
-      remote: zmkfirmware
-      revision: main
+      remote: rdaniel0
+      revision: fix/combo-long-max
       import: app/west.yml
   self:
     path: config
