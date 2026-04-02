@@ -382,26 +382,99 @@ occurred after only 17 minutes (2026-03-31 22:50). Same pattern:
 **Result: Bug 1 is not the crash cause.** The fix is still correct and should
 go upstream, but it doesn't explain our freeze.
 
-### Round 2: Add CONFIG_ASSERT=y (test Bug 2) — current
+### Round 2: Add CONFIG_ASSERT=y (test Bug 2) — DONE, no assertion fired
 
-Keep the Bug 1 fix and enable assertions. combo.c:231 has
-`__ASSERT(pressed_keys_count > 0)` in `filter_timed_out_candidates`. If
-re-entrant event dispatch corrupts combo state, this should fire and produce
-a stack trace.
+Enabled `CONFIG_ASSERT=y` + `CONFIG_ASSERT_LEVEL=2`. Freeze occurred after
+~36.5 hours (2026-04-02 11:33). **No assertions fired.** The
+`pressed_keys_count > 0` assertion in `filter_timed_out_candidates` was never
+triggered.
 
-- If assertion **fires**: Bug 2 confirmed with evidence.
-- If freeze **persists without assertion**: Re-entrancy occurs in a path that
-  doesn't hit this assertion. Add targeted logging in `update_timeout_task`.
+**Result: Bug 2's re-entrancy theory is weakened** — the specific assertion
+path wasn't hit. However, re-entrancy could still occur in a path that doesn't
+trigger this assertion.
 
-### Round 3: If both fixed but freeze persists
+### Fifth freeze (2026-04-02) — new crash pattern
 
-Both bugs were real but the freeze has a different root cause. Next steps:
-- Add LOG_ERR inside `update_timeout_task` to print `first_timeout`, uptime,
-  and computed delay before `k_work_schedule`
-- Enable `CONFIG_RETAINED_MEM` to persist fault info across resets
-- Reduce stack sizes back to defaults since overflow is ruled out
+Session: ~36.5 hours, 534k+ log lines, 0 errors/warnings, 0 BLE disconnects.
+
+Crash sequence — **no combo timeout involved**:
+
+1. Peripheral notification: position 11 release — processed cleanly
+2. Local kscan: position 26 press — captured by combo system
+3. Local kscan: position 19 release — triggers combo `release_pressed_keys`
+   for position 26 (combo timed out due to non-matching key release)
+4. Position 26 keypress processed via `zmk_keymap_apply_position_state`, HID
+   report sent
+5. Position 19 release processed via `zmk_keymap_apply_position_state`, HID
+   report sent
+6. **Dead.** Log ends cleanly after `zmk_endpoint_send_report`.
+
+Key differences from previous freezes:
+- No `combo_timeout_handler: ABOUT TO UPDATE` in crash context
+- `release_pressed_keys` triggered from `position_state_changed_listener`
+  (key-up path), not from `combo_timeout_handler`
+- No stuck keys (combo released position 26 before the freeze)
+- Longest session yet (36.5h vs previous max 31h)
+
+User context: normal typing on default layer, no intentional combo activation,
+no modifier held at time of freeze. Modifiers had been used within prior 5 min.
+
+### Updated comparison across all freezes
+
+| | Mar 24 | Mar 30 (1st) | Mar 30 (2nd) | Mar 31 (R1) | Mar 31 (R1b) | **Apr 2 (R2)** |
+|---|---|---|---|---|---|---|
+| Firmware | original | original | original | +stacks | +LLONG_MAX | **+ASSERT** |
+| Uptime | 12h | 31h | 5.6h | 17h | 17min | **36.5h** |
+| Last function | `pos_state_listener` | `pos_state_listener` | `hold_tap_released` | `combo_timeout ABOUT TO UPDATE` | `combo_timeout ABOUT TO UPDATE` | **`endpoint_send_report`** |
+| Combo timeout | Yes | Yes | No | Yes | Yes | **No** |
+| `release_pressed_keys` visible | Yes | Yes | No | Yes | Yes | **Yes** |
+| Stuck key | Yes | Yes | No | Yes | No | **No** |
+| Assertion fired | n/a | n/a | n/a | n/a | n/a | **No** |
+
+### Revised analysis
+
+The combo timeout handler is not the sole trigger. The common element across
+5 of 6 freezes is **`release_pressed_keys`** — the function that synchronously
+re-raises captured position events via `ZMK_EVENT_RELEASE` / `ZMK_EVENT_RAISE`.
+
+This function is called from:
+- `cleanup()` → called from `combo_timeout_handler` (3 freezes)
+- `cleanup()` → called from `position_state_down` when no candidates remain
+- `position_state_up` → directly, when a non-combo key release arrives while
+  keys are captured (this freeze)
+
+The synchronous event dispatch in `release_pressed_keys` processes events
+through the full listener chain inline. After `release_pressed_keys` returns,
+the caller continues processing — but the global combo state has been modified
+by the re-raised events passing through `position_state_changed_listener`.
+
+## Plan: Round 3 — instrument `release_pressed_keys`
+
+### Approach
+
+Add targeted logging inside `release_pressed_keys` and `update_timeout_task`
+in the ZMK fork to capture the exact state at the crash site:
+
+1. **In `release_pressed_keys`** (combo.c:263): log `pressed_keys_count` before
+   and after the loop, and log each event being released/re-raised
+2. **In `update_timeout_task`** (combo.c:406): log `first_timeout`,
+   `k_uptime_get()`, and the computed delay before `k_work_schedule`
+3. **In `combo_timeout_handler`** (combo.c:475): log `pressed_keys_count` and
+   `timeout_task_timeout_at` before and after the `cleanup()` call
+
+This will show whether:
+- The re-raised events are modifying `pressed_keys_count` during the loop
+- `update_timeout_task` is computing a sane delay
+- The combo state is consistent when `combo_timeout_handler` returns
+
+### Alternative: disable combos entirely
+
+As a control test, temporarily remove all combo definitions from the keymap.
+If the freeze stops, it conclusively proves the combo system is the cause
+(even if we haven't found the exact bug yet). This would also confirm that
+the freeze is not in the BLE stack, HID stack, or elsewhere.
 
 ### Upstream
 
-File issue on zmkfirmware/zmk with the full analysis — both bugs exist in the
-codebase regardless of which causes our specific freeze.
+File issue on zmkfirmware/zmk with findings so far — both identified bugs
+and the `release_pressed_keys` pattern across 6 freezes.
