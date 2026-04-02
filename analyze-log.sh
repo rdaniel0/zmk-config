@@ -22,7 +22,7 @@ fi
 # Also analyze any rotated logs from the same capture session
 ALL_LOGS="$LOGFILE"
 session_start=$(stat -c%Y "$LOGFILE" 2>/dev/null)
-for f in $(ls -1t logs/zmk_*.log 2>/dev/null); do
+for f in $(ls -1t logs/zmk_*.log 2>/dev/null | grep -v '_usb\.log$'); do
     if [ "$f" != "$LOGFILE" ]; then
         f_time=$(stat -c%Y "$f" 2>/dev/null)
         # Include files modified after this log was created (rotated siblings)
@@ -133,41 +133,11 @@ echo "========================================"
 echo "ERRORS AND WARNINGS"
 echo "========================================"
 echo ""
-err_count=$(grep -ciE '<err>|<wrn>|fault|panic|assert|overflow|hard.?fault|bus.?fault|mem.?fault|usage.?fault|stack.?overflow' $ALL_LOGS)
-echo "Total error/warning lines: $err_count"
+err_count=$(grep -iE '<err>|<wrn>|fault|panic|assert|overflow|hard.?fault|bus.?fault|mem.?fault|usage.?fault|stack.?overflow' $ALL_LOGS | grep -cv 'DIAG:')
+echo "Total error/warning lines: $err_count (excluding DIAG)"
 if [ "$err_count" -gt 0 ]; then
     echo ""
-    grep -iE '<err>|<wrn>|fault|panic|assert|overflow|hard.?fault|bus.?fault|mem.?fault|usage.?fault|stack.?overflow' $ALL_LOGS | sed 's/\x1b\[[0-9;]*m//g' | head -50
-fi
-echo ""
-
-# --- Time gaps (potential stalls) ---
-echo "========================================"
-echo "TIME GAPS (>2s between log lines)"
-echo "========================================"
-echo ""
-echo "(Gaps in wall-clock time may indicate MCU stalls or USB buffer delays)"
-echo ""
-prev_ts=""
-prev_epoch=0
-gap_count=0
-while IFS= read -r line; do
-    ts=$(echo "$line" | grep -oP '^\[\K[^\]]+')
-    if [ -n "$ts" ]; then
-        epoch=$(date -d "$ts" +%s 2>/dev/null)
-        if [ -n "$epoch" ] && [ "$prev_epoch" -gt 0 ] 2>/dev/null; then
-            gap=$((epoch - prev_epoch))
-            if [ "$gap" -gt 2 ] && [ "$gap" -lt 86400 ]; then
-                echo "  ${gap}s gap: $prev_ts -> $ts"
-                gap_count=$((gap_count + 1))
-            fi
-        fi
-        prev_ts="$ts"
-        prev_epoch="$epoch"
-    fi
-done < <(sed -n '1~100p' $ALL_LOGS)
-if [ "$gap_count" -eq 0 ]; then
-    echo "  None detected"
+    grep -iE '<err>|<wrn>|fault|panic|assert|overflow|hard.?fault|bus.?fault|mem.?fault|usage.?fault|stack.?overflow' $ALL_LOGS | grep -v 'DIAG:' | sed 's/\x1b\[[0-9;]*m//g' | head -50
 fi
 echo ""
 

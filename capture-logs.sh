@@ -5,7 +5,6 @@
 DEVICE="/dev/ttyACM0"
 LOGFILE=""
 USB_LOG=""
-MAX_LOG_FILES=5     # Keep only this many log files (delete oldest)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PID_FILE="logs/capture.pid"
 CHILD_PID=""
@@ -235,28 +234,11 @@ if [ ! -r "$DEVICE" ] || [ ! -w "$DEVICE" ]; then
     echo ""
 fi
 
-# Function to clean up old log files, keeping only MAX_LOG_FILES most recent
-cleanup_old_logs() {
-    local log_count=$(ls -1 logs/zmk_*.log 2>/dev/null | wc -l)
-
-    if [ "$log_count" -gt "$MAX_LOG_FILES" ]; then
-        local files_to_delete=$((log_count - MAX_LOG_FILES))
-        echo -e "${YELLOW}Cleaning up $files_to_delete old log file(s) (keeping $MAX_LOG_FILES most recent)${NC}"
-
-        # List files by modification time (oldest first), delete the oldest ones
-        ls -1t logs/zmk_*.log | tail -n "$files_to_delete" | while read -r old_file; do
-            echo -e "${YELLOW}  Deleting: $old_file${NC}"
-            rm -f "$old_file"
-        done
-    fi
-}
-
-# Clean up old logs before starting (if we already have too many)
-cleanup_old_logs
+# Clean all previous logs and reports for a fresh session
+rm -f logs/zmk_*.log logs/zmk_*_usb.log logs/report_*.txt
 
 # Display capture info
 echo "Device: $DEVICE"
-echo "Max log files: $MAX_LOG_FILES (will delete oldest)"
 echo ""
 
 echo -e "${GREEN}Starting log capture...${NC}"
