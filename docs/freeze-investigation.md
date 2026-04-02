@@ -431,50 +431,57 @@ no modifier held at time of freeze. Modifiers had been used within prior 5 min.
 | Stuck key | Yes | Yes | No | Yes | No | **No** |
 | Assertion fired | n/a | n/a | n/a | n/a | n/a | **No** |
 
+### Sixth freeze (2026-04-02, Round 3 instrumented) — combo system exonerated
+
+Session: ~2.6 hours, DIAG-instrumented combo.c. Freeze at 17:54:16,
+USB disconnect confirmed 28s later at 17:54:44.
+
+Crash context with full DIAG trace:
+1. Peripheral notification: position 10 (key 'n') press — **no combo candidates**
+   (`pos_down pos=10 no candidates, bubbling`), processed normally
+2. Local kscan: position 19 release — combo cleanup with `pressed=0`, nothing
+   to release, bubbles to keymap
+3. `zmk_keymap_apply_position_state` → `on_keymap_binding_released` → HID report
+4. `zmk_endpoint_send_report: usage page 0x07` — **last log line**
+5. 28s silence, then USB disconnect (user unplugged frozen device)
+
+**The combo system completed all its work and returned cleanly.** Every DIAG
+checkpoint was reached. No stuck keys. The freeze occurred **after** the combo
+system, somewhere in:
+- `zmk_endpoint_send_report` or its BLE/USB HID transport
+- The system workqueue returning to idle after processing the event
+- The BLE stack servicing the HID report
+
+Also noted: two warnings earlier in the session:
+- `Failed to release peripheral slot (-22)` at 16:26:54
+- `Got battery level event for an out of range peripheral index`
+These suggest BLE peripheral slot state corruption.
+
 ### Revised analysis
 
-The combo timeout handler is not the sole trigger. The common element across
-5 of 6 freezes is **`release_pressed_keys`** — the function that synchronously
-re-raises captured position events via `ZMK_EVENT_RELEASE` / `ZMK_EVENT_RAISE`.
+**The combo system is not the freeze cause.** The DIAG instrumentation proves
+the combo code completes normally before every freeze. The combo-related
+patterns in earlier freezes (combo timeout as last log line) were coincidental —
+the combo timeout fires frequently during normal typing, so it often appears
+in the last 30 lines by chance.
 
-This function is called from:
-- `cleanup()` → called from `combo_timeout_handler` (3 freezes)
-- `cleanup()` → called from `position_state_down` when no candidates remain
-- `position_state_up` → directly, when a non-combo key release arrives while
-  keys are captured (this freeze)
+The actual freeze point is **after the full event processing chain completes**,
+somewhere in:
+- The BLE GATT HID report transmission path
+- The system workqueue scheduler returning control after processing
+- The BLE controller or softdevice
 
-The synchronous event dispatch in `release_pressed_keys` processes events
-through the full listener chain inline. After `release_pressed_keys` returns,
-the caller continues processing — but the global combo state has been modified
-by the re-raised events passing through `position_state_changed_listener`.
+The peripheral slot warnings suggest BLE stack state corruption that may
+eventually cause a hang.
 
-## Plan: Round 3 — instrument `release_pressed_keys`
+## Next Steps
 
-### Approach
-
-Add targeted logging inside `release_pressed_keys` and `update_timeout_task`
-in the ZMK fork to capture the exact state at the crash site:
-
-1. **In `release_pressed_keys`** (combo.c:263): log `pressed_keys_count` before
-   and after the loop, and log each event being released/re-raised
-2. **In `update_timeout_task`** (combo.c:406): log `first_timeout`,
-   `k_uptime_get()`, and the computed delay before `k_work_schedule`
-3. **In `combo_timeout_handler`** (combo.c:475): log `pressed_keys_count` and
-   `timeout_task_timeout_at` before and after the `cleanup()` call
-
-This will show whether:
-- The re-raised events are modifying `pressed_keys_count` during the loop
-- `update_timeout_task` is computing a sane delay
-- The combo state is consistent when `combo_timeout_handler` returns
-
-### Alternative: disable combos entirely
-
-As a control test, temporarily remove all combo definitions from the keymap.
-If the freeze stops, it conclusively proves the combo system is the cause
-(even if we haven't found the exact bug yet). This would also confirm that
-the freeze is not in the BLE stack, HID stack, or elsewhere.
-
-### Upstream
-
-File issue on zmkfirmware/zmk with findings so far — both identified bugs
-and the `release_pressed_keys` pattern across 6 freezes.
+- **Investigate BLE/HID report path**: instrument `zmk_endpoint_send_report`
+  and the BLE GATT send path to narrow down where the freeze occurs after
+  the last visible log line
+- **Investigate peripheral slot warnings**: the `-22` error (EINVAL) on
+  `release_peripheral_slot` and the out-of-range battery index suggest BLE
+  peripheral tracking is corrupted — this may be related to the freeze
+- **Remove combo instrumentation**: the DIAG logging is no longer needed in
+  combo.c and adds noise; can be removed once BLE instrumentation is added
+- **File upstream issue** on zmkfirmware/zmk with updated findings
