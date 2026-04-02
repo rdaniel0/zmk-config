@@ -23,6 +23,9 @@ stop_child() {
         kill "$CHILD_PID" 2>/dev/null
         wait "$CHILD_PID" 2>/dev/null
     fi
+    # Kill any tio still holding the device (script doesn't always forward signals)
+    fuser -k "$DEVICE" 2>/dev/null
+    sleep 0.5
     # Strip ANSI escape codes and script header/footer now that script is done writing
     if [ -f "$LOGFILE" ]; then
         sed -i 's/\x1b\[[0-9;]*m//g; s/\r//g' "$LOGFILE"
