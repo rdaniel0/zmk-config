@@ -474,14 +474,54 @@ somewhere in:
 The peripheral slot warnings suggest BLE stack state corruption that may
 eventually cause a hang.
 
-## Next Steps
+## BLE Stack Analysis (2026-04-02)
 
-- **Investigate BLE/HID report path**: instrument `zmk_endpoint_send_report`
-  and the BLE GATT send path to narrow down where the freeze occurs after
-  the last visible log line
-- **Investigate peripheral slot warnings**: the `-22` error (EINVAL) on
-  `release_peripheral_slot` and the out-of-range battery index suggest BLE
-  peripheral tracking is corrupted — this may be related to the freeze
-- **Remove combo instrumentation**: the DIAG logging is no longer needed in
-  combo.c and adds noise; can be removed once BLE instrumentation is added
-- **File upstream issue** on zmkfirmware/zmk with updated findings
+### HID report send architecture
+
+```
+zmk_endpoint_send_report (system workqueue)
+  → zmk_hog_send_keyboard_report (hog.c:338)
+    → k_msgq_put(&zmk_hog_keyboard_msgq, K_MSEC(100))  // BLOCKS on sysworkq!
+    → k_work_submit_to_queue(&hog_work_q, &hog_keyboard_work)
+      → send_keyboard_report_callback (hog_work_q thread)
+        → bt_gatt_notify_cb(conn, &notify_params)
+```
+
+### Three BLE issues identified
+
+**Issue 1: Battery GATT handle leak** — `release_peripheral_slot()` (central.c:215)
+resets position and behavior handles but NOT `batt_lvl_subscribe_params` or
+`batt_lvl_read_params`. Stale subscriptions survive disconnect, causing GATT
+state corruption on reconnect (matches zmkfirmware/zmk#3156).
+
+**Issue 2: Double peripheral slot release** — three code paths can release the
+same slot (create failure, connect error, disconnect callback). Second release
+returns -EINVAL (-22), which is the warning we observed.
+
+**Issue 3: Workqueue stall from blocking msgq_put** — `zmk_hog_send_keyboard_report`
+calls `k_msgq_put(..., K_MSEC(100))` on the system workqueue. If the `hog_work_q`
+consumer is stalled (e.g. `bt_gatt_notify_cb` blocking on a corrupted connection
+from Issue 1), the queue fills and the system workqueue blocks. The recursive
+retry on -EAGAIN could loop indefinitely.
+
+**Related: zmkfirmware/zmk PR #3110** — documents a system workqueue deadlock in
+split BLE code where `bt_gatt_notify()` blocks when called inline. Fix moves
+notify to a managed work queue. Our Issue 3 is a similar pattern.
+
+## Plan: Test A — Disable battery level fetching (current)
+
+Override battery configs in `dactyl.conf`:
+```
+CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING=n
+CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_PROXY=n
+```
+
+This eliminates Issue 1 (battery handle leak) and reduces GATT operations.
+If freeze stops, battery fetching is the root cause.
+
+## Plan: Test B — Instrument HID send path (if Test A doesn't help)
+
+Add LOG_ERR instrumentation in the fork to:
+- `zmk_hog_send_keyboard_report` — before/after `k_msgq_put`
+- `send_keyboard_report_callback` — before/after `bt_gatt_notify_cb`
+- `peripheral_event_work_callback` — entry/exit
