@@ -525,9 +525,59 @@ MCU uptime. Longest session yet (previous max 36.5h wall clock).
 coincidence. The peripheral slot warnings are gone, confirming they were
 battery-related.
 
-## Plan: Test B — Instrument HID send path (current)
+## Test B: Instrument HID send path — DONE, critical finding
 
-Add LOG_ERR instrumentation in the fork to:
-- `zmk_hog_send_keyboard_report` — before/after `k_msgq_put`
-- `send_keyboard_report_callback` — before/after `bt_gatt_notify_cb`
-- `peripheral_event_work_callback` — entry/exit
+Instrumented `zmk_endpoint_send_report`, `zmk_hog_send_keyboard_report`,
+`send_keyboard_report_callback`, and `peripheral_event_work_callback` with
+LOG_ERR DIAG traces. Freeze occurred after ~3h (2026-04-07).
+
+### Critical finding: freeze between two consecutive log statements
+
+```
+[16:21:42.894] zmk_endpoint_send_report: usage page 0x07   ← LOG_DBG fires
+                                                             ← DIAG: endpoint_send ... NEVER fires
+```
+
+The LOG_DBG at endpoints.c:251 executes, but the LOG_ERR on the very next line
+(252) does not. The MCU cannot execute a single additional C statement after
+the LOG_DBG call.
+
+This rules out:
+- Deadlock in HID send path (never reached)
+- Deadlock in `k_msgq_put` (never reached)
+- Deadlock in `bt_gatt_notify_cb` (never reached)
+- Any combo system issue (already exonerated)
+
+This points to:
+- **The logging system itself** — LOG_DBG may trigger the logging thread to
+  process/flush, and something in that path crashes or deadlocks
+- **An interrupt or ISR** firing between the two log calls and never returning
+- **A hard fault** during the LOG_DBG call that doesn't produce visible output
+
+### Possible logging system deadlock
+
+`LOG_DBG` on Zephyr queues a message to the logging subsystem's ring buffer.
+If the ring buffer is full, the call may block waiting for the logging thread
+to drain it. The logging thread runs on its own stack (1536 bytes, 39% used)
+and writes to the USB CDC ACM backend. If the USB stack is stalled (e.g.
+waiting for the host to poll the endpoint), the logging thread blocks, the
+ring buffer fills, and the next LOG_DBG blocks the system workqueue.
+
+This would explain:
+- Why the freeze happens at random points after `zmk_endpoint_send_report`
+  (it's wherever the log buffer happens to fill up)
+- Why the freeze sometimes truncates mid-line (log thread stalls mid-write)
+- Why longer sessions eventually freeze (log buffer pressure accumulates)
+- Why combo-related code appeared in crash context (combo DBG logging is verbose)
+
+## Next Steps
+
+- **Test: set log mode to deferred/drop** — configure logging to drop messages
+  instead of blocking when the buffer is full. If this fixes the freeze, the
+  logging backend (USB CDC) stalling is the root cause.
+- **Test: disable LOG_DBG entirely** — use `CONFIG_ZMK_LOG_LEVEL_INF` instead
+  of `_DBG`. Massively reduces log volume and buffer pressure.
+- **Test: increase log buffer size** — `CONFIG_LOG_BUFFER_SIZE`
+- **Investigate USB CDC ACM flow control** — the host must poll the USB CDC
+  endpoint for log data. If the host is slow or the endpoint is busy with HID
+  reports, the CDC backend blocks.
