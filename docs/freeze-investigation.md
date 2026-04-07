@@ -508,18 +508,24 @@ retry on -EAGAIN could loop indefinitely.
 split BLE code where `bt_gatt_notify()` blocks when called inline. Fix moves
 notify to a managed work queue. Our Issue 3 is a similar pattern.
 
-## Plan: Test A — Disable battery level fetching (current)
+## Test A: Disable battery level fetching — DONE, freeze persists
 
-Override battery configs in `dactyl.conf`:
-```
-CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING=n
-CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_PROXY=n
-```
+Disabled `CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING=n` as of
+2026-04-03. Freeze occurred 2026-04-07 after ~92 hours wall clock / ~19.5h
+MCU uptime. Longest session yet (previous max 36.5h wall clock).
 
-This eliminates Issue 1 (battery handle leak) and reduces GATT operations.
-If freeze stops, battery fetching is the root cause.
+- 0 errors/warnings (no peripheral slot warnings with battery fetching off)
+- No stuck keys, combo system clean (DIAG confirms)
+- Log truncated mid-line: `[12:04:06.435] [` — MCU died during log write
+- Freeze point: after `on_keymap_binding_released` for position 31 (space
+  mod_tap on peripheral), `hid_listener_keycode_released`, then truncation
 
-## Plan: Test B — Instrument HID send path (if Test A doesn't help)
+**Result:** Battery fetching is not the sole cause. The longer session
+(~3x previous) may suggest it contributes to instability, or may be
+coincidence. The peripheral slot warnings are gone, confirming they were
+battery-related.
+
+## Plan: Test B — Instrument HID send path (current)
 
 Add LOG_ERR instrumentation in the fork to:
 - `zmk_hog_send_keyboard_report` — before/after `k_msgq_put`
