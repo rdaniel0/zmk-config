@@ -80,8 +80,11 @@ start_usb_monitor() {
 }
 
 stop_usb_monitor() {
-    [ -n "$USB_MONITOR_PID" ] && kill "$USB_MONITOR_PID" 2>/dev/null
-    [ -n "$USB_POLL_PID" ] && kill "$USB_POLL_PID" 2>/dev/null
+    # Kill subshells and their children (journalctl, sleep)
+    [ -n "$USB_MONITOR_PID" ] && pkill -P "$USB_MONITOR_PID" 2>/dev/null && kill "$USB_MONITOR_PID" 2>/dev/null
+    [ -n "$USB_POLL_PID" ] && pkill -P "$USB_POLL_PID" 2>/dev/null && kill "$USB_POLL_PID" 2>/dev/null
+    USB_MONITOR_PID=""
+    USB_POLL_PID=""
     # Strip ANSI from USB log too
     [ -f "$USB_LOG" ] && sed -i 's/\x1b\[[0-9;]*m//g; s/\r//g' "$USB_LOG"
 }
