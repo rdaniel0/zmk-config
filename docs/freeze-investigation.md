@@ -570,14 +570,30 @@ This would explain:
 - Why longer sessions eventually freeze (log buffer pressure accumulates)
 - Why combo-related code appeared in crash context (combo DBG logging is verbose)
 
+## Confirmed: Hang, not fault (2026-04-09)
+
+Left frozen keyboard connected with USB for several minutes after freeze.
+Observations:
+- MCU stayed enumerated on USB (`lsusb` showed device)
+- No self-recovery — hung indefinitely until manual power cycle
+- RESETREAS=0x00000000 after replug (cold boot, as expected from power loss)
+- Last log line truncated mid-write inside `split_central_notify_func`
+- ~11 hours uptime before freeze
+
+**Conclusion: The freeze is a deadlock/infinite-wait, not a hard fault.**
+The CPU is alive but the firmware is stuck — likely a thread blocked on a
+kernel primitive (log buffer full → LOG_DBG blocks → system workqueue stalls).
+
 ## Next Steps
 
-- **Test: set log mode to deferred/drop** — configure logging to drop messages
-  instead of blocking when the buffer is full. If this fixes the freeze, the
-  logging backend (USB CDC) stalling is the root cause.
-- **Test: disable LOG_DBG entirely** — use `CONFIG_ZMK_LOG_LEVEL_INF` instead
-  of `_DBG`. Massively reduces log volume and buffer pressure.
-- **Test: increase log buffer size** — `CONFIG_LOG_BUFFER_SIZE`
-- **Investigate USB CDC ACM flow control** — the host must poll the USB CDC
-  endpoint for log data. If the host is slow or the endpoint is busy with HID
-  reports, the CDC backend blocks.
+- **Enable hardware watchdog** — `CONFIG_WDT=y` with system workqueue feeding
+  it. If the workqueue stalls, watchdog fires after timeout, resetting the MCU
+  with RESETREAS=WATCHDOG. This also auto-recovers the keyboard.
+- **Test: set log mode to drop** — configure logging to drop messages instead
+  of blocking when the buffer is full (`CONFIG_LOG_MODE_DEFERRED` with overflow
+  handling). If this fixes the freeze, the logging system blocking is confirmed
+  as the root cause.
+- **Test: reduce log level** — `CONFIG_ZMK_LOG_LEVEL_INF` instead of `_DBG`.
+  Massively reduces log volume and buffer pressure.
+- **Test: BT-only firmware** — flash `dactyl_right.uf2` (no USB logging) and
+  see if the freeze still occurs without the logging system active.
