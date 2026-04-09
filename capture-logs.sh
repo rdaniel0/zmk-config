@@ -179,15 +179,13 @@ if ! command -v tio &> /dev/null; then
     fi
 fi
 
-# Check if device exists
+# Wait for device if not connected yet
 if [ ! -e "$DEVICE" ]; then
-    echo -e "${RED}Error: $DEVICE not found${NC}"
-    echo ""
-    echo "Troubleshooting:"
-    echo "1. Is the keyboard (right half) connected via USB?"
-    echo "2. Did you flash the logging firmware (dactyl_right_logging)?"
-    echo "3. Check for other serial devices: ls -la /dev/ttyACM*"
-    exit 1
+    echo -e "${YELLOW}Waiting for $DEVICE — plug in the keyboard...${NC}"
+    while [ ! -e "$DEVICE" ]; do
+        sleep 1
+    done
+    echo -e "${GREEN}✓ Device appeared${NC}"
 fi
 
 echo -e "${GREEN}✓ Found device: $DEVICE${NC}"
