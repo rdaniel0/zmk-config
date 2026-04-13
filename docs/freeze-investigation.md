@@ -584,16 +584,57 @@ Observations:
 The CPU is alive but the firmware is stuck — likely a thread blocked on a
 kernel primitive (log buffer full → LOG_DBG blocks → system workqueue stalls).
 
+## CDC ACM buffer increase — no effect (2026-04-10)
+
+Increased `USB_CDC_ACM_RINGBUF_SIZE` to 4096 and enabled `LOG_MODE_OVERFLOW=y`.
+Freeze occurred after ~1h11m, log truncated mid-write (`zmk_endpoint_` cut off).
+MCU still enumerated on USB, same hang pattern. Buffer size is not the cause.
+
+## BT-only test — freeze confirmed without logging (2026-04-13)
+
+Flashed clean `dactyl_right.uf2` (no USB logging snippet, no CDC ACM, no logging
+thread) and ran on battery for ~3 days. **Keyboard still froze.**
+
+**This definitively rules out the logging system as the cause.** The freeze is
+in the core ZMK firmware — BLE stack, event processing, or Zephyr kernel. All
+log truncation observed in previous captures was the logging system being a
+victim of the hang, not the cause.
+
+## Summary of what's been ruled out
+
+| Hypothesis | Test | Result |
+|---|---|---|
+| Stack overflow | Doubled all stacks | Still froze (but less often) |
+| LONG_MAX sentinel mismatch | Fixed in fork | Still froze |
+| Combo re-entrancy | CONFIG_ASSERT=y | No assertion fired |
+| Combo system bug | DIAG instrumentation | Combo code completes cleanly |
+| Battery GATT handle leak | Disabled battery fetching | Still froze |
+| Log buffer blocking | Increased CDC buffer + overflow mode | Still froze |
+| Logging system entirely | Clean BT-only firmware, no logging | **Still froze** |
+
+## What we know
+
+1. **It's a hang, not a fault** — MCU stays alive (USB enumerated) but firmware
+   is stuck indefinitely. No self-recovery.
+2. **Larger stacks reduce frequency** — reverting to defaults caused 3x more
+   freezes, suggesting stack pressure is a contributing factor.
+3. **Always during typing** — never during idle. Involves key event processing
+   on the system workqueue.
+4. **Peripheral (left half) events often involved** — most freezes occur during
+   or just after processing a BLE notification from the peripheral.
+5. **Position 31 (space/mod_tap) frequently involved** — peripheral key with
+   hold-tap behavior appears in many crash contexts.
+6. **Related upstream issues**: PR #3110 (system workqueue deadlock in split
+   BLE), #2904 (peripheral causes central hang), #3100/#3262 (combo+holdtap
+   crashes).
+
 ## Next Steps
 
-- **Enable hardware watchdog** — `CONFIG_WDT=y` with system workqueue feeding
-  it. If the workqueue stalls, watchdog fires after timeout, resetting the MCU
-  with RESETREAS=WATCHDOG. This also auto-recovers the keyboard.
-- **Test: set log mode to drop** — configure logging to drop messages instead
-  of blocking when the buffer is full (`CONFIG_LOG_MODE_DEFERRED` with overflow
-  handling). If this fixes the freeze, the logging system blocking is confirmed
-  as the root cause.
-- **Test: reduce log level** — `CONFIG_ZMK_LOG_LEVEL_INF` instead of `_DBG`.
-  Massively reduces log volume and buffer pressure.
-- **Test: BT-only firmware** — flash `dactyl_right.uf2` (no USB logging) and
-  see if the freeze still occurs without the logging system active.
+- **Enable hardware watchdog** — auto-recover the keyboard on freeze instead of
+  requiring manual power cycle. Makes the freeze a nuisance instead of a blocker.
+- **Apply PR #3110's fix** — moves peripheral input report `bt_gatt_notify` to
+  a managed work queue to avoid system workqueue deadlock. Most relevant upstream
+  fix for our symptoms.
+- **Native simulation stress tests** — write combo+holdtap+split tests in ZMK's
+  test framework to reproduce the event processing pattern that triggers freezes.
+- **File upstream issue** on zmkfirmware/zmk with the full investigation.
