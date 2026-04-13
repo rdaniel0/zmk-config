@@ -628,13 +628,72 @@ victim of the hang, not the cause.
    BLE), #2904 (peripheral causes central hang), #3100/#3262 (combo+holdtap
    crashes).
 
-## Next Steps
+## Likely root cause: BLE TX buffer exhaustion → K_FOREVER deadlock
 
-- **Enable hardware watchdog** — auto-recover the keyboard on freeze instead of
-  requiring manual power cycle. Makes the freeze a nuisance instead of a blocker.
-- **Apply PR #3110's fix** — moves peripheral input report `bt_gatt_notify` to
-  a managed work queue to avoid system workqueue deadlock. Most relevant upstream
-  fix for our symptoms.
-- **Native simulation stress tests** — write combo+holdtap+split tests in ZMK's
-  test framework to reproduce the event processing pattern that triggers freezes.
-- **File upstream issue** on zmkfirmware/zmk with the full investigation.
+### Discovery (2026-04-13)
+
+Zephyr's `bt_gatt_notify_cb` chooses its blocking behavior based on the calling
+thread:
+- System workqueue → `K_NO_WAIT` (returns error immediately)
+- Any other thread → **`K_FOREVER`** (blocks until a buffer is free)
+
+ZMK's `send_keyboard_report_callback` in hog.c calls `bt_gatt_notify_cb` from
+`hog_work_q` — a **dedicated workqueue, not the system workqueue**. This means
+it gets `K_FOREVER`.
+
+The TX buffer pool is sized by `CONFIG_BT_ATT_TX_COUNT` (defaults to
+`CONFIG_BT_BUF_ACL_TX_COUNT`, default **3**). With only 3 buffers:
+
+1. Rapid typing generates HID reports faster than BLE can acknowledge them
+2. All 3 TX buffers are in-flight waiting for host ACK
+3. `bt_gatt_notify_cb` blocks `hog_work_q` with `K_FOREVER`
+4. `zmk_hog_keyboard_msgq` fills (20 entries)
+5. System workqueue calls `zmk_hog_send_keyboard_report` → `k_msgq_put` with
+   `K_MSEC(100)` → times out → pops oldest → retries (but queue stays full
+   because consumer is blocked)
+6. System workqueue is now spending all its time in retry loops
+7. BLE RX thread queues peripheral events → `k_work_submit` to system workqueue
+   → events pile up because workqueue is busy retrying
+8. Everything stalls
+
+### Why it manifests as a hang, not a fault
+
+No memory corruption, no stack overflow, no illegal instruction. Every thread
+is alive but waiting:
+- `hog_work_q`: blocked in `bt_gatt_notify_cb` → `K_FOREVER` on TX buffer
+- System workqueue: stuck in `k_msgq_put` retry loop or starved by above
+- BLE RX: can still queue events but nobody processes them
+
+### Why larger stacks reduce frequency
+
+Larger stacks don't fix the deadlock, but they provide more headroom for the
+retry loop in `zmk_hog_send_keyboard_report` (recursive call at line 346) and
+for deeper event processing call chains that happen while the system is under
+TX buffer pressure.
+
+### Relevant Zephyr issues
+
+- **#53455**: Deadlock sending GATT notification from system workqueue (FIXED
+  in v4.1 — system workqueue now uses K_NO_WAIT)
+- **#78761**: ATT deadlock via system workqueue blocking BT RX thread (FIXED,
+  adds CONFIG_BT_CONN_TX_NOTIFY_WQ)
+- **#89705**: bt_gatt_notify from preemptible thread causes assert (FIXED)
+
+### Applied fixes
+
+1. **Increased BLE TX buffers**: `CONFIG_BT_BUF_ACL_TX_COUNT=12`,
+   `CONFIG_BT_L2CAP_TX_BUF_COUNT=14`, `CONFIG_BT_CONN_TX_MAX=12`.
+   Provides 4x more TX headroom before `K_FOREVER` kicks in.
+
+2. **Hardware watchdog**: Task WDT fed from system workqueue every 5s, timeout
+   30s. If the workqueue stalls, MCU auto-resets. RESETREAS will show WATCHDOG.
+
+### Further fixes to explore
+
+- **`CONFIG_BT_CONN_TX_NOTIFY_WQ=y`** — experimental Zephyr option that moves
+  TX completion processing to a separate workqueue, preventing system workqueue
+  starvation. ~1KB extra RAM.
+- **Modify hog.c to use K_MSEC timeout** instead of relying on Zephyr's
+  K_FOREVER for non-system-workqueue threads. Would require a ZMK upstream PR.
+- **File upstream issue** on zmkfirmware/zmk documenting the K_FOREVER risk
+  for any dedicated workqueue calling bt_gatt_notify_cb.
