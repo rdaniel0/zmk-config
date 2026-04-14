@@ -732,3 +732,38 @@ The real fix is to prevent `bt_gatt_notify_cb` from blocking forever on
 
 Option 4 (HOG watchdog) is the quickest path to auto-recovery. Option 1 or 3
 is the proper fix that should be submitted upstream to ZMK.
+
+## 12 TX buffers did not fix the freeze (2026-04-14)
+
+Increased BT_BUF_ACL_TX_COUNT to 12 (4x default). Freeze occurred after ~1.5h.
+Log truncated mid-write inside `peripheral_event_work_callback: Trigger ke` on
+the system workqueue.
+
+This contradicts the earlier freeze where the watchdog (monitoring system wq)
+did NOT fire - suggesting the system workqueue was alive. Possible explanations:
+
+1. **The hang is in different threads at different times** - sometimes hog_work_q,
+   sometimes system workqueue, depending on exact timing
+2. **The log truncation is misleading** - the USB CDC ACM backend may stop
+   flushing when any thread blocks, and the last partial message in the buffer
+   could be from any thread regardless of which one is actually hung
+3. **The root cause is deeper in the Zephyr BLE stack** - a BLE controller or
+   softdevice issue that affects all threads using BLE primitives
+
+## Current status
+
+The freeze remains unsolved. What we know for certain:
+- It's a hang, not a fault (MCU stays alive on USB)
+- It happens on BT-only (no USB logging) and with USB logging
+- Larger stacks reduce frequency but don't eliminate it
+- 12 TX buffers don't prevent it
+- The combo system is not involved
+- Battery level fetching is not the sole cause
+- The logging system is not the cause
+- The system workqueue watchdog sometimes fires, sometimes doesn't
+
+The most promising remaining leads:
+- **CONFIG_BT_CONN_TX_NOTIFY_WQ=y** - separate TX completion workqueue
+- **Reproduce in BabbleSim** - simulate the exact freeze conditions
+- **File upstream issue** on zmkfirmware/zmk with full analysis
+- **Try ZMK stable release** instead of main branch to see if it's a regression
