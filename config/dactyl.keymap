@@ -68,7 +68,7 @@
         };
 
         apps_combo {
-            bindings = <&none>;
+            bindings = <&apps_macro>;
             key-positions = <13 17 26>;
             layers = <0>;
         };
