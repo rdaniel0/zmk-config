@@ -688,12 +688,47 @@ TX buffer pressure.
 2. **Hardware watchdog**: Task WDT fed from system workqueue every 5s, timeout
    30s. If the workqueue stalls, MCU auto-resets. RESETREAS will show WATCHDOG.
 
-### Further fixes to explore
+## Confirmed: hog_work_q deadlock, NOT system workqueue (2026-04-14)
 
-- **`CONFIG_BT_CONN_TX_NOTIFY_WQ=y`** — experimental Zephyr option that moves
-  TX completion processing to a separate workqueue, preventing system workqueue
-  starvation. ~1KB extra RAM.
-- **Modify hog.c to use K_MSEC timeout** instead of relying on Zephyr's
-  K_FOREVER for non-system-workqueue threads. Would require a ZMK upstream PR.
-- **File upstream issue** on zmkfirmware/zmk documenting the K_FOREVER risk
-  for any dedicated workqueue calling bt_gatt_notify_cb.
+With task watchdog monitoring the system workqueue (30s timeout):
+- Keyboard froze with stuck key pattern
+- **Watchdog did NOT fire** → system workqueue is alive and feeding it
+- Stuck key held for 2-3 seconds then released → `hog_work_q` eventually
+  got a TX buffer, sent the release report, then blocked again permanently
+- No further input after the release → `hog_work_q` deadlocked in
+  `bt_gatt_notify_cb` with `K_FOREVER`
+- MCU stayed enumerated on USB, log output frozen
+- 12 TX buffers (up from 3) were not enough to prevent the deadlock
+
+**This definitively confirms the freeze is `hog_work_q` blocked in
+`bt_gatt_notify_cb(K_FOREVER)` waiting for BLE TX buffers that the host
+is not acknowledging fast enough.**
+
+The system workqueue is not involved in the deadlock — it continues running
+normally. The keyboard appears frozen because the HOG thread can't send HID
+reports to the host.
+
+### The fix
+
+The real fix is to prevent `bt_gatt_notify_cb` from blocking forever on
+`hog_work_q`. Options:
+
+1. **Move HOG notifications to the system workqueue** — Zephyr uses `K_NO_WAIT`
+   for the system workqueue, so notifications would fail immediately instead of
+   blocking. ZMK would need to handle the `-ENOMEM` return and retry later.
+
+2. **`CONFIG_BT_CONN_TX_NOTIFY_WQ=y`** — experimental Zephyr option that moves
+   TX completion processing to a separate workqueue, which may help the TX
+   buffer pool drain faster.
+
+3. **Patch `hog.c` to check buffer availability** before calling
+   `bt_gatt_notify_cb`, or use a timeout-based retry instead of blocking.
+
+4. **Add a watchdog channel on `hog_work_q`** — since the system workqueue
+   watchdog can't detect the HOG deadlock, add a second watchdog channel fed
+   from `hog_work_q`. When HOG blocks, the watchdog fires and resets the MCU.
+
+### Immediate mitigation
+
+Option 4 (HOG watchdog) is the quickest path to auto-recovery. Option 1 or 3
+is the proper fix that should be submitted upstream to ZMK.
