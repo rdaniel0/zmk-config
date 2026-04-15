@@ -762,8 +762,34 @@ The freeze remains unsolved. What we know for certain:
 - The logging system is not the cause
 - The system workqueue watchdog sometimes fires, sometimes doesn't
 
-The most promising remaining leads:
-- **CONFIG_BT_CONN_TX_NOTIFY_WQ=y** - separate TX completion workqueue
-- **Reproduce in BabbleSim** - simulate the exact freeze conditions
+## CONFIG_BT_CONN_TX_NOTIFY_WQ did not fix the freeze (2026-04-15)
+
+Enabled separate TX completion workqueue. Freeze after ~24h uptime. Last line
+`zmk_endpoint_send_report: usage page 0x07` - clean end, no truncation.
+
+This rules out TX completion competing with system workqueue as the cause.
+
+## Complete list of ruled-out hypotheses
+
+| Hypothesis | Test | Result |
+|---|---|---|
+| Stack overflow | Doubled all stacks | Reduces frequency, doesn't eliminate |
+| LONG_MAX sentinel mismatch | Fixed in fork | No effect |
+| Combo re-entrancy | CONFIG_ASSERT=y | No assertion fired |
+| Combo system bug | DIAG instrumentation | Combo code completes cleanly |
+| Battery GATT handle leak | Disabled fetching | No effect |
+| Log buffer blocking | Overflow mode + 4KB CDC buffer | No effect |
+| Logging system | Clean BT-only firmware | Still froze |
+| BLE TX buffer exhaustion | 12 buffers (4x default) | No effect |
+| TX completion workqueue | CONFIG_BT_CONN_TX_NOTIFY_WQ=y | No effect |
+
+## Remaining leads
+
 - **File upstream issue** on zmkfirmware/zmk with full analysis
-- **Try ZMK stable release** instead of main branch to see if it's a regression
+- **Reproduce in BabbleSim** - simulate the exact freeze conditions
+- **Try ZMK stable release** instead of main to check for regression
+- **Try different host** - test with a different BLE host (phone, different
+  computer) to rule out host-side BLE stack issues
+- **Zephyr BLE controller bug** - the nRF52840 BLE controller (softdevice
+  equivalent in Zephyr) may have known issues with connection parameter
+  handling or flow control under load
