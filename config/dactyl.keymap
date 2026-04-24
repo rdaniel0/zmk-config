@@ -16,6 +16,18 @@
 &mt { flavor = "balanced"; };
 
 / {
+    behaviors {
+        pht: pinky_hold_tap {
+            compatible = "zmk,behavior-hold-tap";
+            #binding-cells = <2>;
+            flavor = "balanced";
+            tapping-term-ms = <200>;
+            require-prior-idle-ms = <150>;
+            quick-tap-ms = <175>;
+            bindings = <&kp>, <&kp>;
+        };
+    };
+
     combos {
         compatible = "zmk,combos";
 
@@ -124,7 +136,7 @@
             bindings = <
 &kp B        &kp L  &kp D     &kp W            &kp Z         &kp SINGLE_QUOTE  &kp F            &kp O      &kp U    &kp J
 &kp N        &kp R  &kp T     &kp S            &kp G         &kp Y             &kp H            &kp A      &kp E    &kp I
-&mt LCTRL Q  &kp X  &kp M     &kp C            &kp V         &kp K             &kp P            &kp COMMA  &kp DOT  &mt RCTRL FSLH
+&pht LCTRL Q  &kp X  &kp M    &kp C            &kp V         &kp K             &kp P            &kp COMMA  &kp DOT  &pht RCTRL FSLH
                     &kp LGUI  &mt LSHFT SPACE  &mo CMDSYM    &mo NAVNUM        &mt RSHFT ENTER  &kp RALT
             >;
         };
@@ -133,7 +145,7 @@
             bindings = <
 &kp ESCAPE  &kp TAB  &kp DEL  &trans     &trans    &kp GRAVE  &trans    &kp LBKT   &kp RBKT   &trans
 &kp LGUI    &trans   &trans   &kp LSHFT  &trans    &trans     &kp SEMI  &kp LPAR   &kp RPAR   &trans
-&trans      &trans   &trans   &trans     &trans    &trans     &trans    &kp MINUS  &kp EQUAL  &mt RCTRL BSLH
+&trans      &trans   &trans   &trans     &trans    &trans     &trans    &kp MINUS  &kp EQUAL  &pht RCTRL BSLH
                      &trans   &trans     &trans    &trans     &trans    &trans
             >;
         };
